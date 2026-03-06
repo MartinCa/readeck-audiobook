@@ -48,9 +48,9 @@ async def index(request: Request, page: int = 1, search: str = ""):
         logger.error("Failed to fetch bookmarks: %s", exc)
         data = {"items": [], "total": 0, "total_pages": 1, "current_page": page}
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "bookmarks": data["items"],
             "total": data["total"],
             "total_pages": data["total_pages"],
@@ -69,9 +69,9 @@ async def jobs_page(request: Request, page: int = 1):
     job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE, offset=offset)
     total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
     return templates.TemplateResponse(
+        request,
         "jobs.html",
         {
-            "request": request,
             "jobs": job_list,
             "current_page": page,
             "total_pages": total_pages,
@@ -106,9 +106,9 @@ async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
     job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE)
     total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
     return templates.TemplateResponse(
+        request,
         "jobs.html",
         {
-            "request": request,
             "jobs": job_list,
             "current_page": 1,
             "total_pages": total_pages,
