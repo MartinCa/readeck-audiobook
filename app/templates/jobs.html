@@ -15,8 +15,7 @@
        {% if job.status in ('pending', 'processing') %}
        hx-get="/api/jobs/{{ job.id }}/status"
        hx-trigger="every 4s"
-       hx-swap="outerHTML"
-       hx-target="#job-{{ job.id }}"
+       hx-swap="none"
        {% endif %}>
     <div style="display:flex;gap:0.75rem;align-items:flex-start;">
       <div style="flex:1;min-width:0;">
@@ -53,15 +52,21 @@
 {% endif %}
 
 <script>
-// HTMX: after a status poll returns JSON, re-render the row using the response
+// Poll status without swapping the DOM; update badge in place and reload on terminal state.
 document.body.addEventListener("htmx:afterRequest", function(evt) {
   const el = evt.detail.elt;
   if (!el.id || !el.id.startsWith("job-")) return;
   try {
     const data = JSON.parse(evt.detail.xhr.responseText);
     if (data.status === "completed" || data.status === "failed") {
-      // Stop polling and refresh the full jobs list
       window.location.reload();
+      return;
+    }
+    // Update badge text so the user sees live status without a full reload
+    const badge = el.querySelector(".badge");
+    if (badge) {
+      badge.textContent = data.status;
+      badge.className = "badge badge-" + data.status;
     }
   } catch (_) {}
 });

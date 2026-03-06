@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 import aiosqlite
@@ -66,7 +66,7 @@ async def list_jobs() -> list[dict]:
 
 
 async def update_job(job_id: str, **kwargs):
-    kwargs["updated_at"] = datetime.utcnow().isoformat()
+    kwargs["updated_at"] = datetime.now(timezone.utc).isoformat()
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     values = list(kwargs.values()) + [job_id]
     async with aiosqlite.connect(DB_PATH) as db:
@@ -83,20 +83,34 @@ async def delete_job(job_id: str) -> dict | None:
     return job
 
 
-async def next_pending_job() -> dict | None:
+async def claim_next_pending_job(max_concurrent: int) -> dict | None:
+    """Atomically claim the next pending job if fewer than max_concurrent are running.
+
+    Uses a single UPDATE so there is no TOCTOU window between checking the
+    active count and marking a job as processing.
+    """
+    now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute(
+            """
+            UPDATE jobs
+               SET status = 'processing', updated_at = ?
+             WHERE id = (
+                 SELECT id FROM jobs
+                  WHERE status = 'pending'
+                  ORDER BY created_at
+                  LIMIT 1
+             )
+               AND (SELECT COUNT(*) FROM jobs WHERE status = 'processing') < ?
+            """,
+            (now, max_concurrent),
+        )
+        await db.commit()
+        # Return the row we just claimed, if any
         async with db.execute(
-            "SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at LIMIT 1"
+            "SELECT * FROM jobs WHERE status = 'processing' AND updated_at = ? LIMIT 1",
+            (now,),
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
-
-
-async def count_processing() -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT COUNT(*) FROM jobs WHERE status = 'processing'"
-        ) as cur:
-            row = await cur.fetchone()
-            return row[0] if row else 0

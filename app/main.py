@@ -3,18 +3,17 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import aiofiles
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app import jobs, models, readeck
+from app.tts import AUDIO_DIR
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-AUDIO_DIR = Path("/app/audio")
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 

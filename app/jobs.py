@@ -13,7 +13,7 @@ _worker_task: asyncio.Task | None = None
 
 async def _process_job(job: dict):
     job_id = job["id"]
-    await models.update_job(job_id, status=models.JobStatus.processing)
+    # Job is already marked 'processing' by claim_next_pending_job
     try:
         text = await readeck.get_article_text(job["bookmark_id"])
         bookmark = await readeck.get_bookmark(job["bookmark_id"])
@@ -43,11 +43,9 @@ async def worker_loop():
     """Continuously pick up pending jobs up to MAX_CONCURRENT at a time."""
     while True:
         try:
-            active = await models.count_processing()
-            if active < MAX_CONCURRENT:
-                job = await models.next_pending_job()
-                if job:
-                    asyncio.create_task(_process_job(job))
+            job = await models.claim_next_pending_job(MAX_CONCURRENT)
+            if job:
+                asyncio.create_task(_process_job(job))
         except Exception:
             logger.exception("Worker loop error")
         await asyncio.sleep(2)
