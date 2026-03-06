@@ -2,7 +2,11 @@
 {% block title %}Jobs – Readeck Audiobook{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom:1rem;font-size:1.4rem;">Audio Generation Jobs</h1>
+<div class="toolbar">
+  <h1 style="font-size:1.4rem;">Audio Generation Jobs</h1>
+  <span class="spacer"></span>
+  <span class="meta">{{ total }} job{{ 's' if total != 1 }}</span>
+</div>
 
 {% if flash %}
 <div class="flash">{{ flash }}</div>
@@ -45,6 +49,26 @@
   </div>
   {% endfor %}
 </div>
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if current_page > 1 %}
+    <a href="/jobs?page={{ current_page - 1 }}">← Prev</a>
+  {% endif %}
+  {% for p in range(1, total_pages + 1) %}
+    {% if p == current_page %}
+      <a href="/jobs?page={{ p }}" class="active">{{ p }}</a>
+    {% elif p <= 3 or p >= total_pages - 2 or (p >= current_page - 1 and p <= current_page + 1) %}
+      <a href="/jobs?page={{ p }}">{{ p }}</a>
+    {% elif p == 4 or p == total_pages - 3 %}
+      <span style="padding:0 0.25rem;">…</span>
+    {% endif %}
+  {% endfor %}
+  {% if current_page < total_pages %}
+    <a href="/jobs?page={{ current_page + 1 }}">Next →</a>
+  {% endif %}
+</div>
+{% endif %}
+
 {% else %}
 <div class="card" style="text-align:center;padding:3rem;color:#64748b;">
   No jobs yet. Go to <a href="/">Bookmarks</a> to queue some.

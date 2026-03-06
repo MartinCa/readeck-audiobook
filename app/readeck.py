@@ -1,10 +1,14 @@
+import logging
 import os
 from typing import Any
 
 import httpx
+from bs4 import BeautifulSoup
 
-READECK_BASE_URL = os.environ["READECK_BASE_URL"].rstrip("/")
-READECK_API_TOKEN = os.environ["READECK_API_TOKEN"]
+logger = logging.getLogger(__name__)
+
+READECK_BASE_URL = os.environ.get("READECK_BASE_URL", "").rstrip("/")
+READECK_API_TOKEN = os.environ.get("READECK_API_TOKEN", "")
 
 _headers = {"Authorization": f"Bearer {READECK_API_TOKEN}", "Accept": "application/json"}
 
@@ -40,13 +44,16 @@ async def get_article_text(bookmark_id: str) -> str:
         )
         if resp.status_code == 200 and resp.text.strip():
             return resp.text
+        logger.debug(
+            "Markdown endpoint returned %s for bookmark %s; falling back to HTML",
+            resp.status_code, bookmark_id,
+        )
 
     # Fallback: fetch HTML and strip tags
     html_headers = {**_headers, "Accept": "text/html"}
     async with httpx.AsyncClient(headers=html_headers, timeout=60) as client:
         resp = await client.get(f"{READECK_BASE_URL}/api/bookmarks/{bookmark_id}/article")
         resp.raise_for_status()
-        from bs4 import BeautifulSoup
         soup = BeautifulSoup(resp.text, "html.parser")
         return soup.get_text(separator="\n", strip=True)
 

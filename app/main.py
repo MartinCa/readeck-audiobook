@@ -19,9 +19,13 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    missing = [v for v in ("READECK_BASE_URL", "READECK_API_TOKEN") if not os.environ.get(v)]
+    if missing:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
     await models.init_db()
     jobs.start_worker()
     yield
+    jobs.stop_worker()
 
 
 app = FastAPI(title="Readeck Audiobook", lifespan=lifespan)
@@ -50,12 +54,20 @@ async def index(request: Request, page: int = 1, search: str = ""):
     })
 
 
+JOBS_PER_PAGE = 50
+
+
 @app.get("/jobs", response_class=HTMLResponse)
-async def jobs_page(request: Request):
-    all_jobs = await models.list_jobs()
+async def jobs_page(request: Request, page: int = 1):
+    offset = (page - 1) * JOBS_PER_PAGE
+    job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE, offset=offset)
+    total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
     return templates.TemplateResponse("jobs.html", {
         "request": request,
-        "jobs": all_jobs,
+        "jobs": job_list,
+        "current_page": page,
+        "total_pages": total_pages,
+        "total": total,
     })
 
 
@@ -81,10 +93,14 @@ async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
         )
         created.append(job)
 
-    all_jobs = await models.list_jobs()
+    job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE)
+    total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
     return templates.TemplateResponse("jobs.html", {
         "request": request,
-        "jobs": all_jobs,
+        "jobs": job_list,
+        "current_page": 1,
+        "total_pages": total_pages,
+        "total": total,
         "flash": f"Queued {len(created)} job(s).",
     })
 
@@ -113,7 +129,8 @@ async def job_status(job_id: str):
 
 @app.get("/api/jobs")
 async def api_jobs():
-    return await models.list_jobs()
+    job_list, _ = await models.list_jobs()
+    return job_list
 
 
 # ── File download ──────────────────────────────────────────────────────────────

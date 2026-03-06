@@ -3,6 +3,10 @@ services:
     build: .
     ports:
       - "8080:8080"
+    depends_on:
+      ebook2audiobook:
+        condition: service_healthy
+        required: false   # ignored when the ebook2audiobook profile is not active
     environment:
       READECK_BASE_URL: ${READECK_BASE_URL}
       READECK_API_TOKEN: ${READECK_API_TOKEN}
@@ -29,6 +33,14 @@ services:
       - e2a_voices:/app/voices      # custom voice files (optional)
       - e2a_ebooks:/app/ebooks      # staging area for input EPUBs
       - e2a_audiobooks:/app/audiobooks  # ebook2audiobook's own output dir
+    healthcheck:
+      # Gradio serves HTTP on 7860; Python is always available in the image
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:7860/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s  # first run downloads multi-GB models
     restart: unless-stopped
 
 volumes:

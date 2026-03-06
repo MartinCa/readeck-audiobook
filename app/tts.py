@@ -1,7 +1,10 @@
 """TTS backend implementations."""
+import logging
 import os
 import re
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 AUDIO_DIR = Path("/app/audio")
 
@@ -121,6 +124,12 @@ async def generate_audio(job_id: str, text: str, lang: str,
         output_path = AUDIO_DIR / f"{job_id}.mp3"
         await synthesize_ebook2audiobook(epub_bytes, output_path, lang=lang)
     else:
+        if TTS_ENGINE == "ebook2audiobook":
+            logger.warning(
+                "TTS_ENGINE=ebook2audiobook but no EPUB bytes available for job %s; "
+                "falling back to edge-tts",
+                job_id,
+            )
         voice = _pick_voice(lang)
         output_path = AUDIO_DIR / f"{job_id}.mp3"
         cleaned = _clean_markdown(text)

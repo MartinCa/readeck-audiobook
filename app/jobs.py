@@ -54,3 +54,10 @@ async def worker_loop():
 def start_worker():
     global _worker_task
     _worker_task = asyncio.create_task(worker_loop())
+
+
+def stop_worker():
+    global _worker_task
+    if _worker_task and not _worker_task.done():
+        _worker_task.cancel()
+        _worker_task = None

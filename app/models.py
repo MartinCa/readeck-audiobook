@@ -57,15 +57,28 @@ async def get_job(job_id: str) -> dict | None:
             return dict(row) if row else None
 
 
-async def list_jobs() -> list[dict]:
+async def list_jobs(limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    """Return (jobs, total_count) with pagination."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM jobs ORDER BY created_at DESC") as cur:
+        async with db.execute("SELECT COUNT(*) FROM jobs") as cur:
+            row = await cur.fetchone()
+            total = row[0] if row else 0
+        async with db.execute(
+            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ) as cur:
             rows = await cur.fetchall()
-            return [dict(r) for r in rows]
+            return [dict(r) for r in rows], total
+
+
+_UPDATABLE_COLUMNS = frozenset({"status", "audio_path", "error_msg"})
 
 
 async def update_job(job_id: str, **kwargs):
+    invalid = set(kwargs.keys()) - _UPDATABLE_COLUMNS
+    if invalid:
+        raise ValueError(f"update_job: unknown columns {invalid}")
     kwargs["updated_at"] = datetime.now(timezone.utc).isoformat()
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     values = list(kwargs.values()) + [job_id]
