@@ -39,14 +39,13 @@ async def get_article_text(bookmark_id: str) -> str:
     """Fetch the article as Markdown (plain text-friendly, no HTML stripping needed)."""
     md_headers = {**_headers, "Accept": "text/markdown"}
     async with httpx.AsyncClient(headers=md_headers, timeout=60) as client:
-        resp = await client.get(
-            f"{READECK_BASE_URL}/api/bookmarks/{bookmark_id}/article.md"
-        )
+        resp = await client.get(f"{READECK_BASE_URL}/api/bookmarks/{bookmark_id}/article.md")
         if resp.status_code == 200 and resp.text.strip():
             return resp.text
         logger.debug(
             "Markdown endpoint returned %s for bookmark %s; falling back to HTML",
-            resp.status_code, bookmark_id,
+            resp.status_code,
+            bookmark_id,
         )
 
     # Fallback: fetch HTML and strip tags
@@ -61,8 +60,6 @@ async def get_article_text(bookmark_id: str) -> str:
 async def get_article_epub(bookmark_id: str) -> bytes:
     epub_headers = {**_headers, "Accept": "application/epub+zip"}
     async with httpx.AsyncClient(headers=epub_headers, timeout=120) as client:
-        resp = await client.get(
-            f"{READECK_BASE_URL}/api/bookmarks/{bookmark_id}/article.epub"
-        )
+        resp = await client.get(f"{READECK_BASE_URL}/api/bookmarks/{bookmark_id}/article.epub")
         resp.raise_for_status()
         return resp.content

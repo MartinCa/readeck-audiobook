@@ -6,7 +6,6 @@ os.environ.setdefault("READECK_BASE_URL", "http://readeck.test")
 os.environ.setdefault("READECK_API_TOKEN", "test-token")
 
 import httpx
-import pytest
 import pytest_asyncio
 
 from app import models

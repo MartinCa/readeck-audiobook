@@ -1,7 +1,6 @@
 """Integration tests for FastAPI routes."""
-from unittest.mock import AsyncMock
 
-import pytest
+from unittest.mock import AsyncMock
 
 from app import models
 
@@ -67,9 +66,7 @@ async def test_post_jobs_multiple_bookmarks(client, monkeypatch):
         "app.readeck.get_bookmark",
         AsyncMock(return_value={"title": "Article", "url": "http://example.com"}),
     )
-    resp = await client.post(
-        "/jobs", data={"bookmark_ids": ["id1", "id2", "id3"]}
-    )
+    resp = await client.post("/jobs", data={"bookmark_ids": ["id1", "id2", "id3"]})
     assert resp.status_code == 200
     jobs, total = await models.list_jobs()
     assert total == 3

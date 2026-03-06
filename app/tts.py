@@ -1,4 +1,5 @@
 """TTS backend implementations."""
+
 import logging
 import os
 import re
@@ -58,6 +59,7 @@ def _clean_markdown(text: str) -> str:
 
 async def synthesize_edge_tts(text: str, output_path: Path, voice: str):
     import edge_tts
+
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(str(output_path))
 
@@ -115,8 +117,9 @@ async def synthesize_ebook2audiobook(epub_bytes: bytes, output_path: Path, lang:
     await asyncio.to_thread(_run_sync)
 
 
-async def generate_audio(job_id: str, text: str, lang: str,
-                         epub_bytes: bytes | None = None) -> Path:
+async def generate_audio(
+    job_id: str, text: str, lang: str, epub_bytes: bytes | None = None
+) -> Path:
     """Generate audio and return the path to the output file."""
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 

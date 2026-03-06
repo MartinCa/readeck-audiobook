@@ -29,11 +29,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Readeck Audiobook", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=str(Path(__file__).parent.parent / "static")), name="static")
+app.mount(
+    "/static", StaticFiles(directory=str(Path(__file__).parent.parent / "static")), name="static"
+)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 # ── Pages ──────────────────────────────────────────────────────────────────────
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, page: int = 1, search: str = ""):
@@ -44,14 +47,17 @@ async def index(request: Request, page: int = 1, search: str = ""):
     except Exception as exc:
         logger.error("Failed to fetch bookmarks: %s", exc)
         data = {"items": [], "total": 0, "total_pages": 1, "current_page": page}
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "bookmarks": data["items"],
-        "total": data["total"],
-        "total_pages": data["total_pages"],
-        "current_page": page,
-        "search": search,
-    })
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "bookmarks": data["items"],
+            "total": data["total"],
+            "total_pages": data["total_pages"],
+            "current_page": page,
+            "search": search,
+        },
+    )
 
 
 JOBS_PER_PAGE = 50
@@ -62,16 +68,20 @@ async def jobs_page(request: Request, page: int = 1):
     offset = (page - 1) * JOBS_PER_PAGE
     job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE, offset=offset)
     total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
-    return templates.TemplateResponse("jobs.html", {
-        "request": request,
-        "jobs": job_list,
-        "current_page": page,
-        "total_pages": total_pages,
-        "total": total,
-    })
+    return templates.TemplateResponse(
+        "jobs.html",
+        {
+            "request": request,
+            "jobs": job_list,
+            "current_page": page,
+            "total_pages": total_pages,
+            "total": total,
+        },
+    )
 
 
 # ── Actions ────────────────────────────────────────────────────────────────────
+
 
 @app.post("/jobs", response_class=HTMLResponse)
 async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
@@ -95,14 +105,17 @@ async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
 
     job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE)
     total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
-    return templates.TemplateResponse("jobs.html", {
-        "request": request,
-        "jobs": job_list,
-        "current_page": 1,
-        "total_pages": total_pages,
-        "total": total,
-        "flash": f"Queued {len(created)} job(s).",
-    })
+    return templates.TemplateResponse(
+        "jobs.html",
+        {
+            "request": request,
+            "jobs": job_list,
+            "current_page": 1,
+            "total_pages": total_pages,
+            "total": total,
+            "flash": f"Queued {len(created)} job(s).",
+        },
+    )
 
 
 @app.delete("/jobs/{job_id}")
@@ -118,6 +131,7 @@ async def delete_job(job_id: str):
 
 
 # ── API endpoints ──────────────────────────────────────────────────────────────
+
 
 @app.get("/api/jobs/{job_id}/status")
 async def job_status(job_id: str):
@@ -135,6 +149,7 @@ async def api_jobs():
 
 # ── File download ──────────────────────────────────────────────────────────────
 
+
 @app.get("/audio/{filename}")
 async def download_audio(filename: str):
     # Prevent path traversal
@@ -150,6 +165,7 @@ async def download_audio(filename: str):
 
 
 # ── Health ─────────────────────────────────────────────────────────────────────
+
 
 @app.get("/health")
 async def health():

@@ -1,6 +1,6 @@
 """Tests for the Readeck API client using respx to mock httpx."""
+
 import httpx
-import pytest
 import respx
 
 from app import readeck

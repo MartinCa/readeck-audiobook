@@ -1,4 +1,5 @@
 """Background job worker."""
+
 import asyncio
 import logging
 import os

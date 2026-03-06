@@ -1,4 +1,5 @@
 """Tests for the SQLite model layer."""
+
 import pytest
 
 from app import models
