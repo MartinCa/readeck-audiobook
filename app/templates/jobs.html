@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Jobs – Readeck Audiobook{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom:1rem;font-size:1.4rem;">Audio Generation Jobs</h1>
+
+{% if flash %}
+<div class="flash">{{ flash }}</div>
+{% endif %}
+
+{% if jobs %}
+<div class="grid" id="jobs-list">
+  {% for job in jobs %}
+  <div class="card" id="job-{{ job.id }}"
+       {% if job.status in ('pending', 'processing') %}
+       hx-get="/api/jobs/{{ job.id }}/status"
+       hx-trigger="every 4s"
+       hx-swap="outerHTML"
+       hx-target="#job-{{ job.id }}"
+       {% endif %}>
+    <div style="display:flex;gap:0.75rem;align-items:flex-start;">
+      <div style="flex:1;min-width:0;">
+        <div class="title">{{ job.bookmark_title or job.bookmark_id }}</div>
+        <div class="meta">
+          {% if job.bookmark_url %}
+            <a href="{{ job.bookmark_url }}" target="_blank" rel="noopener">{{ job.bookmark_url[:60] }}{% if job.bookmark_url|length > 60 %}…{% endif %}</a> ·
+          {% endif %}
+          {{ job.tts_engine }} · {{ job.created_at[:16] | replace('T', ' ') }}
+        </div>
+        {% if job.error_msg %}
+        <div style="font-size:0.82rem;color:#dc2626;margin-top:0.4rem;">{{ job.error_msg }}</div>
+        {% endif %}
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-shrink:0;">
+        <span class="badge badge-{{ job.status }}">{{ job.status }}</span>
+        {% if job.status == 'completed' and job.audio_path %}
+        <a href="/audio/{{ job.audio_path }}" class="btn btn-primary btn-sm" download>⬇ Download</a>
+        {% endif %}
+        <button class="btn btn-danger btn-sm"
+                hx-delete="/jobs/{{ job.id }}"
+                hx-confirm="Delete this job and its audio file?"
+                hx-target="#job-{{ job.id }}"
+                hx-swap="outerHTML">✕</button>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card" style="text-align:center;padding:3rem;color:#64748b;">
+  No jobs yet. Go to <a href="/">Bookmarks</a> to queue some.
+</div>
+{% endif %}
+
+<script>
+// HTMX: after a status poll returns JSON, re-render the row using the response
+document.body.addEventListener("htmx:afterRequest", function(evt) {
+  const el = evt.detail.elt;
+  if (!el.id || !el.id.startsWith("job-")) return;
+  try {
+    const data = JSON.parse(evt.detail.xhr.responseText);
+    if (data.status === "completed" || data.status === "failed") {
+      // Stop polling and refresh the full jobs list
+      window.location.reload();
+    }
+  } catch (_) {}
+});
+</script>
+{% endblock %}
