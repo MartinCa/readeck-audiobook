@@ -59,19 +59,57 @@ async def synthesize_edge_tts(text: str, output_path: Path, voice: str):
     await communicate.save(str(output_path))
 
 
-async def synthesize_ebook2audiobook(epub_bytes: bytes, output_path: Path):
-    import httpx
+async def synthesize_ebook2audiobook(epub_bytes: bytes, output_path: Path, lang: str = "en"):
+    """Call the ebook2audiobook Gradio service via gradio_client.
+
+    The Gradio app exposes a REST-like API that gradio_client wraps.
+    The client handles uploading the EPUB and downloading the result.
+    """
+    import asyncio
+    import shutil
+    import tempfile
+
     if not EBOOK2AUDIOBOOK_URL:
-        raise RuntimeError("EBOOK2AUDIOBOOK_URL is not set")
-    async with httpx.AsyncClient(timeout=600) as client:
-        # POST EPUB, poll for result — implementation depends on the API
-        resp = await client.post(
-            f"{EBOOK2AUDIOBOOK_URL}/convert",
-            content=epub_bytes,
-            headers={"Content-Type": "application/epub+zip"},
-        )
-        resp.raise_for_status()
-        output_path.write_bytes(resp.content)
+        raise RuntimeError("EBOOK2AUDIOBOOK_URL is not set — add it to your .env")
+
+    def _run_sync():
+        from gradio_client import Client, handle_file
+
+        # Write the EPUB bytes to a temp file so gradio_client can upload it
+        with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tmp:
+            tmp.write(epub_bytes)
+            epub_path = tmp.name
+
+        try:
+            client = Client(EBOOK2AUDIOBOOK_URL)
+            # ebook2audiobook's Gradio interface: first positional arg is the ebook file.
+            # Additional args (voice, language, custom_model, …) all have defaults so
+            # we only pass the ebook and the language.
+            result = client.predict(
+                ebook_file_input=handle_file(epub_path),
+                target_voice_file=None,
+                language=lang or "en",
+                use_custom_model=False,
+                custom_model_file=None,
+                custom_config_file=None,
+                custom_vocab_file=None,
+                custom_model_url="",
+                temperature=0.65,
+                length_penalty=1.0,
+                repetition_penalty=2.5,
+                top_k=50,
+                top_p=0.8,
+                speed=1.0,
+                enable_text_splitting=True,
+                api_name="/convert_ebook",
+            )
+            # result is a tuple; the audio file path is the first element
+            audio_result = result[0] if isinstance(result, (list, tuple)) else result
+            shutil.copy(str(audio_result), str(output_path))
+        finally:
+            Path(epub_path).unlink(missing_ok=True)
+
+    await asyncio.to_thread(_run_sync)
 
 
 async def generate_audio(job_id: str, text: str, lang: str,
@@ -81,7 +119,7 @@ async def generate_audio(job_id: str, text: str, lang: str,
 
     if TTS_ENGINE == "ebook2audiobook" and epub_bytes:
         output_path = AUDIO_DIR / f"{job_id}.mp3"
-        await synthesize_ebook2audiobook(epub_bytes, output_path)
+        await synthesize_ebook2audiobook(epub_bytes, output_path, lang=lang)
     else:
         voice = _pick_voice(lang)
         output_path = AUDIO_DIR / f"{job_id}.mp3"
