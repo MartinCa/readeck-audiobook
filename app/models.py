@@ -1,6 +1,6 @@
 import uuid
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 
 import aiosqlite
 
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 """
 
 
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     pending = "pending"
     processing = "processing"
     completed = "completed"
@@ -36,8 +36,9 @@ async def init_db():
         await db.commit()
 
 
-async def create_job(bookmark_id: str, bookmark_title: str, bookmark_url: str,
-                     tts_engine: str, voice: str) -> dict:
+async def create_job(
+    bookmark_id: str, bookmark_title: str, bookmark_url: str, tts_engine: str, voice: str
+) -> dict:
     job_id = str(uuid.uuid4())
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -79,7 +80,7 @@ async def update_job(job_id: str, **kwargs):
     invalid = set(kwargs.keys()) - _UPDATABLE_COLUMNS
     if invalid:
         raise ValueError(f"update_job: unknown columns {invalid}")
-    kwargs["updated_at"] = datetime.now(timezone.utc).isoformat()
+    kwargs["updated_at"] = datetime.now(UTC).isoformat()
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     values = list(kwargs.values()) + [job_id]
     async with aiosqlite.connect(DB_PATH) as db:
@@ -102,7 +103,7 @@ async def claim_next_pending_job(max_concurrent: int) -> dict | None:
     Uses a single UPDATE so there is no TOCTOU window between checking the
     active count and marking a job as processing.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         await db.execute(

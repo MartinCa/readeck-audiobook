@@ -1,7 +1,6 @@
 """Tests for pure functions in app.tts (no I/O required)."""
-import pytest
 
-from app.tts import _clean_markdown, _pick_voice, DEFAULT_VOICE
+from app.tts import DEFAULT_VOICE, _clean_markdown, _pick_voice
 
 
 class TestPickVoice:
@@ -73,8 +72,8 @@ class TestCleanMarkdown:
 
     def test_removes_horizontal_rules(self):
         result = _clean_markdown("Above\n---\nBelow")
-        lines = [l for l in result.splitlines() if l.strip()]
-        assert not any(set(l.strip()) <= {"-"} for l in lines)
+        lines = [line for line in result.splitlines() if line.strip()]
+        assert not any(set(line.strip()) <= {"-"} for line in lines)
 
     def test_collapses_excess_blank_lines(self):
         result = _clean_markdown("A\n\n\n\nB")
