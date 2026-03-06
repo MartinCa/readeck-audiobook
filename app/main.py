@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Readeck Audiobook", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="/app/static"), name="static")
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent.parent / "static")), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
