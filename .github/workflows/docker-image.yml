@@ -26,7 +26,7 @@ jobs:
             type=raw,value=${{ github.run_id }}
 
       - name: Build (no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
