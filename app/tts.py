@@ -64,6 +64,36 @@ async def synthesize_edge_tts(text: str, output_path: Path, voice: str):
     await communicate.save(str(output_path))
 
 
+def _discover_api_name(client) -> str:
+    """Discover the correct Gradio API endpoint for ebook conversion.
+
+    ebook2audiobook has renamed its endpoint across versions (e.g.
+    /convert_ebook, /ebook2audiobook, etc.).  We inspect the client's
+    API info and pick the best match instead of hardcoding a name.
+    """
+    # client.endpoints is a dict mapping api_name -> Endpoint objects
+    named = [name for name in client.endpoints if name.startswith("/")]
+    if not named:
+        # No named endpoints — fall back to fn_index=0 via unnamed endpoint
+        raise RuntimeError(
+            "ebook2audiobook Gradio app has no named API endpoints; "
+            "cannot determine which function to call"
+        )
+
+    # Prefer an endpoint whose name contains "convert" or "ebook"
+    for candidate in named:
+        lower = candidate.lower()
+        if "convert" in lower or "ebook" in lower:
+            return candidate
+
+    # Fall back to the first named endpoint
+    logger.warning(
+        "No 'convert'/'ebook' endpoint found; using first available: %s",
+        named[0],
+    )
+    return named[0]
+
+
 async def synthesize_ebook2audiobook(epub_bytes: bytes, output_path: Path, lang: str = "en"):
     """Call the ebook2audiobook Gradio service via gradio_client.
 
@@ -87,9 +117,13 @@ async def synthesize_ebook2audiobook(epub_bytes: bytes, output_path: Path, lang:
 
         try:
             client = Client(EBOOK2AUDIOBOOK_URL)
-            # ebook2audiobook's Gradio interface: first positional arg is the ebook file.
-            # Additional args (voice, language, custom_model, …) all have defaults so
-            # we only pass the ebook and the language.
+
+            # Discover the correct API endpoint name dynamically.
+            # ebook2audiobook renamed its Gradio endpoint across versions,
+            # so we probe the API info rather than hardcoding a name.
+            api_name = _discover_api_name(client)
+            logger.info("Using ebook2audiobook endpoint: %s", api_name)
+
             result = client.predict(
                 ebook_file_input=handle_file(epub_path),
                 target_voice_file=None,
@@ -106,7 +140,7 @@ async def synthesize_ebook2audiobook(epub_bytes: bytes, output_path: Path, lang:
                 top_p=0.8,
                 speed=1.0,
                 enable_text_splitting=True,
-                api_name="/convert_ebook",
+                api_name=api_name,
             )
             # result is a tuple; the audio file path is the first element
             audio_result = result[0] if isinstance(result, (list, tuple)) else result
