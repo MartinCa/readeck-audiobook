@@ -1,0 +1,6 @@
+# Extra dependencies for TTS_ENGINE=kokoro (see Dockerfile.kokoro).
+# Pulls in torch as a transitive dependency of kokoro — kept out of the
+# default requirements.txt so the base image stays lightweight.
+-r requirements.txt
+kokoro>=0.9.4
+soundfile

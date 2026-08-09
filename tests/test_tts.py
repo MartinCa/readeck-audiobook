@@ -1,12 +1,9 @@
 """Tests for pure functions in app.tts (no I/O required)."""
 
-import asyncio
-from pathlib import Path
-
 import pytest
 
 import app.tts as tts
-from app.tts import DEFAULT_VOICE, _clean_markdown, _find_output_file, _pick_voice
+from app.tts import DEFAULT_VOICE, _clean_markdown, _pick_voice
 
 
 class TestPickVoice:
@@ -93,105 +90,68 @@ class TestCleanMarkdown:
         assert _clean_markdown("") == ""
 
 
-class TestFindOutputFile:
-    def test_no_files_raises(self, tmp_path):
-        with pytest.raises(RuntimeError, match="no output file"):
-            _find_output_file(tmp_path)
+class TestGenerateAudio:
+    """Covers generate_audio's engine-dispatch logic; synthesize_kokoro/synthesize_edge_tts
+    are faked out since exercising the real backends needs edge_tts/kokoro installed."""
 
-    def test_single_file_returned(self, tmp_path):
-        audio = tmp_path / "book.mp3"
-        audio.write_bytes(b"data")
-        assert _find_output_file(tmp_path) == audio
+    async def test_edge_tts_default_engine(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tts, "AUDIO_DIR", tmp_path)
+        monkeypatch.setattr(tts, "TTS_ENGINE", "edge-tts")
+        calls = {}
 
-    def test_single_file_in_subdir_returned(self, tmp_path):
-        subdir = tmp_path / "nested"
-        subdir.mkdir()
-        audio = subdir / "book.mp3"
-        audio.write_bytes(b"data")
-        assert _find_output_file(tmp_path) == audio
+        async def fake_edge(text, output_path, voice):
+            calls["edge"] = voice
+            output_path.write_bytes(b"x")
 
-    def test_multiple_files_raises(self, tmp_path):
-        (tmp_path / "a.mp3").write_bytes(b"data")
-        (tmp_path / "b.mp3").write_bytes(b"data")
-        with pytest.raises(RuntimeError, match="multiple output files"):
-            _find_output_file(tmp_path)
+        monkeypatch.setattr(tts, "synthesize_edge_tts", fake_edge)
+        result = await tts.generate_audio("job1", "Hello world", "en")
 
+        assert calls["edge"] == "en-US-AriaNeural"
+        assert result == tmp_path / "job1.mp3"
 
-class _FakeProcess:
-    def __init__(self, returncode: int, stdout: bytes = b""):
-        self.returncode = returncode
-        self._stdout = stdout
-        self.killed = False
+    async def test_kokoro_used_for_supported_language(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tts, "AUDIO_DIR", tmp_path)
+        monkeypatch.setattr(tts, "TTS_ENGINE", "kokoro")
+        calls = {}
 
-    async def communicate(self):
-        return self._stdout, b""
+        async def fake_kokoro(text, output_path):
+            calls["kokoro"] = True
+            output_path.write_bytes(b"x")
 
-    def kill(self):
-        self.killed = True
+        async def fake_edge(text, output_path, voice):
+            calls["edge"] = True
+            output_path.write_bytes(b"x")
 
-    async def wait(self):
-        return self.returncode
+        monkeypatch.setattr(tts, "synthesize_kokoro", fake_kokoro)
+        monkeypatch.setattr(tts, "synthesize_edge_tts", fake_edge)
+        await tts.generate_audio("job1", "Hello world", "en-US")
 
+        assert calls.get("kokoro") is True
+        assert "edge" not in calls
 
-class TestSynthesizeEbook2Audiobook:
-    def _fake_cli(self, tmp_path) -> Path:
-        cli = tmp_path / "ebook2audiobook.command"
-        cli.write_text("#!/bin/sh\n")
-        return cli
+    async def test_kokoro_falls_back_to_edge_tts_for_unsupported_language(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(tts, "AUDIO_DIR", tmp_path)
+        monkeypatch.setattr(tts, "TTS_ENGINE", "kokoro")
+        calls = {}
 
-    async def test_missing_cli_raises(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(tts, "EBOOK2AUDIOBOOK_CMD", str(tmp_path / "missing"))
-        with pytest.raises(RuntimeError, match="not found"):
-            await tts.synthesize_ebook2audiobook(b"epub-bytes", tmp_path / "out.mp3", lang="en")
+        async def fake_kokoro(text, output_path):
+            calls["kokoro"] = True
+            output_path.write_bytes(b"x")
 
-    async def test_success_copies_output(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(tts, "EBOOK2AUDIOBOOK_CMD", str(self._fake_cli(tmp_path)))
+        async def fake_edge(text, output_path, voice):
+            calls["edge"] = voice
+            output_path.write_bytes(b"x")
 
-        captured_cmd = {}
+        monkeypatch.setattr(tts, "synthesize_kokoro", fake_kokoro)
+        monkeypatch.setattr(tts, "synthesize_edge_tts", fake_edge)
+        await tts.generate_audio("job1", "Hallo Welt", "de")
 
-        async def fake_create_subprocess_exec(*cmd, stdout=None, stderr=None):
-            captured_cmd["cmd"] = cmd
-            output_dir = Path(cmd[cmd.index("--output_dir") + 1])
-            (output_dir / "book.mp3").write_bytes(b"audio-data")
-            return _FakeProcess(returncode=0)
+        assert "kokoro" not in calls
+        assert calls["edge"] == "de-DE-KatjaNeural"
 
-        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-
-        output_path = tmp_path / "result.mp3"
-        await tts.synthesize_ebook2audiobook(b"epub-bytes", output_path, lang="en-US")
-
-        assert output_path.read_bytes() == b"audio-data"
-        cmd = captured_cmd["cmd"]
-        assert "--headless" in cmd
-        assert cmd[cmd.index("--language") + 1] == "en"
-        assert cmd[cmd.index("--output_format") + 1] == "mp3"
-
-    async def test_nonzero_exit_raises_with_output(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(tts, "EBOOK2AUDIOBOOK_CMD", str(self._fake_cli(tmp_path)))
-
-        async def fake_create_subprocess_exec(*cmd, stdout=None, stderr=None):
-            return _FakeProcess(returncode=1, stdout=b"boom: something failed")
-
-        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-
-        with pytest.raises(RuntimeError, match="boom: something failed"):
-            await tts.synthesize_ebook2audiobook(b"epub-bytes", tmp_path / "out.mp3", lang="en")
-
-    async def test_timeout_kills_process_and_raises(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(tts, "EBOOK2AUDIOBOOK_CMD", str(self._fake_cli(tmp_path)))
-        fake_proc = _FakeProcess(returncode=0)
-
-        async def fake_create_subprocess_exec(*cmd, stdout=None, stderr=None):
-            return fake_proc
-
-        async def fake_wait_for(coro, timeout):
-            coro.close()
-            raise TimeoutError
-
-        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-        monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
-
-        with pytest.raises(RuntimeError, match="timed out"):
-            await tts.synthesize_ebook2audiobook(b"epub-bytes", tmp_path / "out.mp3", lang="en")
-
-        assert fake_proc.killed
+    async def test_empty_text_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tts, "AUDIO_DIR", tmp_path)
+        with pytest.raises(ValueError, match="No readable text"):
+            await tts.generate_audio("job1", "", "en")

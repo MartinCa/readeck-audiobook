@@ -27,8 +27,11 @@ LANG_VOICE_MAP = {
 
 DEFAULT_VOICE = os.environ.get("EDGE_TTS_VOICE", "en-US-AriaNeural")
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "edge-tts")
-EBOOK2AUDIOBOOK_CMD = os.environ.get("EBOOK2AUDIOBOOK_CMD", "/app/ebook2audiobook.command")
-EBOOK2AUDIOBOOK_TIMEOUT = int(os.environ.get("EBOOK2AUDIOBOOK_TIMEOUT_SECONDS", "7200"))
+KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
+# Kokoro-82M only covers a handful of languages; everything else still goes
+# through edge-tts even when TTS_ENGINE=kokoro. English only for now.
+KOKORO_LANG_CODE = "a"  # American English
+KOKORO_SUPPORTED_LANGS = {"en"}
 
 
 def _pick_voice(lang: str) -> str:
@@ -65,103 +68,74 @@ async def synthesize_edge_tts(text: str, output_path: Path, voice: str):
     await communicate.save(str(output_path))
 
 
-def _find_output_file(output_dir: Path) -> Path:
-    """Locate the single audio file ebook2audiobook produced under output_dir."""
-    candidates = [p for p in output_dir.rglob("*") if p.is_file()]
-    if not candidates:
-        raise RuntimeError(f"ebook2audiobook produced no output file in {output_dir}")
-    if len(candidates) > 1:
-        names = ", ".join(p.name for p in candidates)
-        raise RuntimeError(f"ebook2audiobook produced multiple output files: {names}")
-    return candidates[0]
+_kokoro_pipeline = None
 
 
-async def synthesize_ebook2audiobook(epub_bytes: bytes, output_path: Path, lang: str = "en"):
-    """Convert an EPUB via ebook2audiobook's headless CLI, run as a local subprocess.
+def _get_kokoro_pipeline():
+    """Lazily construct and cache the Kokoro pipeline (loads the model once per process)."""
+    global _kokoro_pipeline
+    if _kokoro_pipeline is None:
+        from kokoro import KPipeline
 
-    ebook2audiobook's Gradio UI does not expose a stable HTTP API for conversion —
-    the only supported non-interactive path is `--headless` mode. This assumes the
-    ebook2audiobook runtime is bundled into this image (see Dockerfile.ebook2audiobook)
-    so the CLI is available locally at EBOOK2AUDIOBOOK_CMD.
-    """
+        _kokoro_pipeline = KPipeline(lang_code=KOKORO_LANG_CODE)
+    return _kokoro_pipeline
+
+
+async def synthesize_kokoro(text: str, output_path: Path, voice: str = KOKORO_VOICE):
+    """Synthesize speech with the local Kokoro-82M model (CUDA if available, else CPU)."""
     import asyncio
-    import shutil
+    import subprocess
     import tempfile
 
-    if not Path(EBOOK2AUDIOBOOK_CMD).exists():
-        raise RuntimeError(
-            f"{EBOOK2AUDIOBOOK_CMD} not found — TTS_ENGINE=ebook2audiobook requires an image "
-            "built from Dockerfile.ebook2audiobook, which bundles the ebook2audiobook runtime."
-        )
+    import numpy as np
+    import soundfile as sf
 
-    tmp_dir = Path(tempfile.mkdtemp(prefix="e2a-job-"))
-    try:
-        input_path = tmp_dir / "input.epub"
-        input_path.write_bytes(epub_bytes)
-        output_dir = tmp_dir / "output"
-        output_dir.mkdir()
+    def _run_sync():
+        pipeline = _get_kokoro_pipeline()
+        chunks = [audio for _, _, audio in pipeline(text, voice=voice)]
+        if not chunks:
+            raise RuntimeError("Kokoro produced no audio")
+        audio = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
 
-        base_lang = (lang or "en").split("-")[0].lower()
-        cmd = [
-            EBOOK2AUDIOBOOK_CMD,
-            "--headless",
-            "--ebook",
-            str(input_path),
-            "--language",
-            base_lang,
-            "--output_format",
-            "mp3",
-            "--output_dir",
-            str(output_dir),
-        ]
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            wav_path = Path(tmp.name)
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=EBOOK2AUDIOBOOK_TIMEOUT)
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise RuntimeError(
-                f"ebook2audiobook conversion timed out after {EBOOK2AUDIOBOOK_TIMEOUT}s"
-            ) from None
+            sf.write(str(wav_path), audio, 24000)
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(wav_path),
+                "-codec:a",
+                "libmp3lame",
+                "-qscale:a",
+                "2",
+                str(output_path),
+            ]
+            result = subprocess.run(ffmpeg_cmd, capture_output=True)
+            if result.returncode != 0:
+                stderr = result.stderr.decode(errors="replace")
+                raise RuntimeError(f"ffmpeg failed encoding Kokoro output to mp3: {stderr[-2000:]}")
+        finally:
+            wav_path.unlink(missing_ok=True)
 
-        output = stdout.decode(errors="replace")
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"ebook2audiobook exited with code {proc.returncode}: {output[-4000:]}"
-            )
-
-        result_file = _find_output_file(output_dir)
-        shutil.copy(str(result_file), str(output_path))
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    await asyncio.to_thread(_run_sync)
 
 
-async def generate_audio(
-    job_id: str, text: str, lang: str, epub_bytes: bytes | None = None
-) -> Path:
+async def generate_audio(job_id: str, text: str, lang: str) -> Path:
     """Generate audio and return the path to the output file."""
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = AUDIO_DIR / f"{job_id}.mp3"
 
-    if TTS_ENGINE == "ebook2audiobook" and epub_bytes:
-        output_path = AUDIO_DIR / f"{job_id}.mp3"
-        await synthesize_ebook2audiobook(epub_bytes, output_path, lang=lang)
+    cleaned = _clean_markdown(text)
+    if not cleaned:
+        raise ValueError("No readable text found in bookmark article")
+
+    base_lang = (lang or "").split("-")[0].lower()
+    if TTS_ENGINE == "kokoro" and base_lang in KOKORO_SUPPORTED_LANGS:
+        await synthesize_kokoro(cleaned, output_path)
     else:
-        if TTS_ENGINE == "ebook2audiobook":
-            logger.warning(
-                "TTS_ENGINE=ebook2audiobook but no EPUB bytes available for job %s; "
-                "falling back to edge-tts",
-                job_id,
-            )
         voice = _pick_voice(lang)
-        output_path = AUDIO_DIR / f"{job_id}.mp3"
-        cleaned = _clean_markdown(text)
-        if not cleaned:
-            raise ValueError("No readable text found in bookmark article")
         await synthesize_edge_tts(cleaned, output_path, voice)
 
     return output_path

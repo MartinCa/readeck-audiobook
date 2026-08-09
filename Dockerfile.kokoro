@@ -1,0 +1,32 @@
+# Variant image that bundles the Kokoro-82M TTS model so TTS_ENGINE=kokoro can run
+# speech synthesis in-process (CUDA if available, else CPU) instead of edge-tts.
+# Pinned to 3.12 (not the 3.14 base of the default Dockerfile) for solid torch/kokoro support.
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    espeak-ng \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt requirements-kokoro.txt .
+RUN pip install --no-cache-dir -r requirements-kokoro.txt
+
+COPY app/ ./app/
+COPY static/ ./static/
+
+# Kokoro's model weights are downloaded from the Hugging Face Hub on first use;
+# point the cache at a path that can be mounted as a volume to persist it.
+ENV HF_HOME=/app/models
+
+RUN mkdir -p /app/audio /app/data /app/models && \
+    useradd -r -u 1001 appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 8080
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

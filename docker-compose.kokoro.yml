@@ -1,0 +1,29 @@
+# Compose override that swaps the readeck-audiobook image for the variant bundling
+# the Kokoro-82M TTS model (see Dockerfile.kokoro), for higher-quality speech than
+# edge-tts (English only for now).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.kokoro.yml up -d --build
+# Then set TTS_ENGINE=kokoro in your .env.
+#
+# Requires the NVIDIA Container Toolkit on the host for GPU acceleration (falls back
+# to CPU automatically otherwise — drop the `deploy` block below to run CPU-only).
+services:
+  readeck-audiobook:
+    build:
+      context: .
+      dockerfile: Dockerfile.kokoro
+    environment:
+      TTS_ENGINE: kokoro
+    volumes:
+      - kokoro_models:/app/models   # cache downloaded Kokoro model weights
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  kokoro_models:

@@ -10,7 +10,7 @@ Browse your Readeck library, select articles, queue them for audio generation, a
 - Background TTS job queue with live status polling
 - Two TTS backends:
   - **edge-tts** (default) — Microsoft neural voices, no API key, ~200 MB Docker image
-  - **ebook2audiobook** (optional) — high-quality neural TTS with voice cloning, runs as a separate container
+  - **kokoro** (optional) — small local neural model, runs in-process, no API key, English only for now
 - Automatic language detection: voice is chosen based on the bookmark's `lang` field
 - MP3 download links for completed jobs
 - SQLite persistence — no external database needed
@@ -48,9 +48,9 @@ All settings are passed as environment variables (or via `.env`).
 |---|---|---|---|
 | `READECK_BASE_URL` | Yes | — | Readeck instance URL, e.g. `https://readeck.example.com` |
 | `READECK_API_TOKEN` | Yes | — | Readeck Bearer API token |
-| `TTS_ENGINE` | No | `edge-tts` | `edge-tts` or `ebook2audiobook` |
+| `TTS_ENGINE` | No | `edge-tts` | `edge-tts` or `kokoro` |
 | `EDGE_TTS_VOICE` | No | `en-US-AriaNeural` | Default voice when language cannot be detected |
-| `EBOOK2AUDIOBOOK_TIMEOUT_SECONDS` | No | `7200` | Max time to wait for an ebook2audiobook conversion before failing the job |
+| `KOKORO_VOICE` | No | `af_heart` | Kokoro voice name, only used when `TTS_ENGINE=kokoro` |
 | `MAX_CONCURRENT_JOBS` | No | `2` | Maximum simultaneous TTS jobs |
 
 ### Language-to-voice mapping (edge-tts)
@@ -74,39 +74,26 @@ The voice is automatically selected based on the bookmark's `lang` field:
 
 Any unlisted language falls back to `EDGE_TTS_VOICE`.
 
-## ebook2audiobook (optional)
+## Kokoro (optional, higher quality)
 
-[ebook2audiobook](https://github.com/DrewThomasson/ebook2audiobook) produces higher-quality audio using large neural TTS models and supports voice cloning. It is significantly heavier (multi-GB model downloads on first run).
+[Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) is a small (82M parameter) open-weight neural TTS model that runs directly in-process — no separate service, no multi-GB download, no subprocess orchestration. Quality is noticeably better than edge-tts, and it runs fine on CPU (near-instant on a GPU if one's available — it uses CUDA automatically when present).
 
-Its Gradio UI does not expose a stable HTTP API for conversion — the only supported non-interactive path is its `--headless` CLI mode. Because of that, `TTS_ENGINE=ebook2audiobook` does **not** talk to a separate service over the network: instead, `Dockerfile.ebook2audiobook` builds a variant of this image on top of `athomasson2/ebook2audiobook`, and the app shells out to the bundled headless CLI locally for each conversion job.
+**Currently English only.** Kokoro only covers a handful of languages; when `TTS_ENGINE=kokoro`, bookmarks in any other language still fall back to edge-tts automatically (same as today).
 
 **Enable it:**
 
 ```sh
 # In your .env
-TTS_ENGINE=ebook2audiobook
+TTS_ENGINE=kokoro
 ```
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.ebook2audiobook.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.kokoro.yml up -d --build
 ```
 
-The default base image is the CUDA build (`athomasson2/ebook2audiobook:v26.7.27-cu130`), which requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. For CPU or ROCm hosts, build with a different base image and drop the `deploy.resources.reservations.devices` GPU block from `docker-compose.ebook2audiobook.yml`:
+This builds `Dockerfile.kokoro`, a variant image with `kokoro`/`torch`/`soundfile` installed (kept out of the default `requirements.txt` so the base image stays lightweight). It uses the NVIDIA Container Toolkit for GPU acceleration if available on the host; drop the `deploy.resources.reservations.devices` block in `docker-compose.kokoro.yml` to run CPU-only.
 
-```sh
-docker compose -f docker-compose.yml -f docker-compose.ebook2audiobook.yml build \
-  --build-arg E2A_BASE_IMAGE=docker.io/athomasson2/ebook2audiobook:cpu
-```
-
-| Hardware | Tag |
-|---|---|
-| NVIDIA CUDA (default) | `athomasson2/ebook2audiobook:v26.7.27-cu130` |
-| CPU only | `athomasson2/ebook2audiobook:cpu` |
-| AMD ROCm 6.4 | `athomasson2/ebook2audiobook:rocm6.4` |
-
-**Notes:**
-- This image variant runs as root, unlike the default `Dockerfile` — the bundled ebook2audiobook runtime itself runs as root, and recursively `chown`-ing multi-GB model-cache volumes on every start isn't practical.
-- Each conversion spawns its own `ebook2audiobook` process with its own model load — there's no shared server-side queue anymore. Keep `MAX_CONCURRENT_JOBS=1` unless the host has enough RAM/VRAM headroom for multiple concurrent model loads.
+Model weights (a few hundred MB) download from the Hugging Face Hub on first use and are cached in the `kokoro_models` volume.
 
 ## Architecture
 
@@ -115,7 +102,7 @@ readeck-audiobook/
 ├── app/
 │   ├── main.py        # FastAPI routes and lifespan
 │   ├── readeck.py     # Readeck API client (httpx)
-│   ├── tts.py         # TTS backends (edge-tts, ebook2audiobook)
+│   ├── tts.py         # TTS backends (edge-tts, kokoro)
 │   ├── jobs.py        # Background worker loop
 │   ├── models.py      # SQLite schema and queries (aiosqlite)
 │   └── templates/     # Jinja2 HTML templates
