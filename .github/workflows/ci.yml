@@ -8,8 +8,15 @@ on:
 
 jobs:
   lint-and-test:
-    name: Lint, format & test
+    name: Lint, format & test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the declared minimum (and what Dockerfile.kokoro runs);
+        # 3.14 is what the default image ships.
+        python-version: ["3.12", "3.14"]
 
     steps:
       - uses: actions/checkout@v6
@@ -17,7 +24,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements-dev.txt
 

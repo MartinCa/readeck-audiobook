@@ -1,5 +1,11 @@
 # Readeck Audiobook Web App - Implementation Plan
 
+> **Historical document.** This was the original design sketch, kept for
+> context. It no longer describes the code: job execution is a database-polling
+> worker rather than `BackgroundTasks` + an asyncio queue, `GET /api/bookmarks`
+> was never built, and configuration, storage paths and the endpoint list have
+> all moved on. See [README.md](README.md) for how the app actually works.
+
 ## Overview
 
 A lightweight web app that fetches bookmarks from a Readeck instance and generates audio versions asynchronously using TTS. Users can select bookmarks, queue generation jobs, and download the resulting MP3/WAV files.

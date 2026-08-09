@@ -5,3 +5,9 @@ audio/
 data/
 *.mp3
 *.wav
+
+# Local tooling
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
