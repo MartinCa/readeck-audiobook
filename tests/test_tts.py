@@ -1,5 +1,8 @@
 """Tests for pure functions in app.tts (no I/O required)."""
 
+import pytest
+
+import app.tts as tts
 from app.tts import DEFAULT_VOICE, _clean_markdown, _pick_voice
 
 
@@ -85,3 +88,70 @@ class TestCleanMarkdown:
 
     def test_empty_string(self):
         assert _clean_markdown("") == ""
+
+
+class TestGenerateAudio:
+    """Covers generate_audio's engine-dispatch logic; synthesize_kokoro/synthesize_edge_tts
+    are faked out since exercising the real backends needs edge_tts/kokoro installed."""
+
+    async def test_edge_tts_default_engine(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tts, "AUDIO_DIR", tmp_path)
+        monkeypatch.setattr(tts, "TTS_ENGINE", "edge-tts")
+        calls = {}
+
+        async def fake_edge(text, output_path, voice):
+            calls["edge"] = voice
+            output_path.write_bytes(b"x")
+
+        monkeypatch.setattr(tts, "synthesize_edge_tts", fake_edge)
+        result = await tts.generate_audio("job1", "Hello world", "en")
+
+        assert calls["edge"] == "en-US-AriaNeural"
+        assert result == tmp_path / "job1.mp3"
+
+    async def test_kokoro_used_for_supported_language(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tts, "AUDIO_DIR", tmp_path)
+        monkeypatch.setattr(tts, "TTS_ENGINE", "kokoro")
+        calls = {}
+
+        async def fake_kokoro(text, output_path):
+            calls["kokoro"] = True
+            output_path.write_bytes(b"x")
+
+        async def fake_edge(text, output_path, voice):
+            calls["edge"] = True
+            output_path.write_bytes(b"x")
+
+        monkeypatch.setattr(tts, "synthesize_kokoro", fake_kokoro)
+        monkeypatch.setattr(tts, "synthesize_edge_tts", fake_edge)
+        await tts.generate_audio("job1", "Hello world", "en-US")
+
+        assert calls.get("kokoro") is True
+        assert "edge" not in calls
+
+    async def test_kokoro_falls_back_to_edge_tts_for_unsupported_language(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(tts, "AUDIO_DIR", tmp_path)
+        monkeypatch.setattr(tts, "TTS_ENGINE", "kokoro")
+        calls = {}
+
+        async def fake_kokoro(text, output_path):
+            calls["kokoro"] = True
+            output_path.write_bytes(b"x")
+
+        async def fake_edge(text, output_path, voice):
+            calls["edge"] = voice
+            output_path.write_bytes(b"x")
+
+        monkeypatch.setattr(tts, "synthesize_kokoro", fake_kokoro)
+        monkeypatch.setattr(tts, "synthesize_edge_tts", fake_edge)
+        await tts.generate_audio("job1", "Hallo Welt", "de")
+
+        assert "kokoro" not in calls
+        assert calls["edge"] == "de-DE-KatjaNeural"
+
+    async def test_empty_text_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tts, "AUDIO_DIR", tmp_path)
+        with pytest.raises(ValueError, match="No readable text"):
+            await tts.generate_audio("job1", "", "en")

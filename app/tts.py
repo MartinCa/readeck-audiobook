@@ -27,7 +27,11 @@ LANG_VOICE_MAP = {
 
 DEFAULT_VOICE = os.environ.get("EDGE_TTS_VOICE", "en-US-AriaNeural")
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "edge-tts")
-EBOOK2AUDIOBOOK_URL = os.environ.get("EBOOK2AUDIOBOOK_URL", "")
+KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
+# Kokoro-82M only covers a handful of languages; everything else still goes
+# through edge-tts even when TTS_ENGINE=kokoro. English only for now.
+KOKORO_LANG_CODE = "a"  # American English
+KOKORO_SUPPORTED_LANGS = {"en"}
 
 
 def _pick_voice(lang: str) -> str:
@@ -64,80 +68,88 @@ async def synthesize_edge_tts(text: str, output_path: Path, voice: str):
     await communicate.save(str(output_path))
 
 
-async def synthesize_ebook2audiobook(epub_bytes: bytes, output_path: Path, lang: str = "en"):
-    """Call the ebook2audiobook Gradio service via gradio_client.
+_kokoro_pipeline = None
 
-    The Gradio app exposes a REST-like API that gradio_client wraps.
-    The client handles uploading the EPUB and downloading the result.
-    """
+
+def _get_kokoro_pipeline():
+    """Lazily construct and cache the Kokoro pipeline (loads the model once per process)."""
+    global _kokoro_pipeline
+    if _kokoro_pipeline is None:
+        import torch
+        from kokoro import KPipeline
+
+        _kokoro_pipeline = KPipeline(lang_code=KOKORO_LANG_CODE)
+        device = _kokoro_pipeline.model.device
+        if device.type == "cuda":
+            logger.info(
+                "Kokoro model loaded on CUDA device %s (%s)",
+                device.index or 0,
+                torch.cuda.get_device_name(device),
+            )
+        else:
+            logger.info(
+                "Kokoro model loaded on %s (CUDA available: %s)",
+                device,
+                torch.cuda.is_available(),
+            )
+    return _kokoro_pipeline
+
+
+async def synthesize_kokoro(text: str, output_path: Path, voice: str = KOKORO_VOICE):
+    """Synthesize speech with the local Kokoro-82M model (CUDA if available, else CPU)."""
     import asyncio
-    import shutil
+    import subprocess
     import tempfile
 
-    if not EBOOK2AUDIOBOOK_URL:
-        raise RuntimeError("EBOOK2AUDIOBOOK_URL is not set — add it to your .env")
+    import numpy as np
+    import soundfile as sf
 
     def _run_sync():
-        from gradio_client import Client, handle_file
+        pipeline = _get_kokoro_pipeline()
+        chunks = [audio for _, _, audio in pipeline(text, voice=voice)]
+        if not chunks:
+            raise RuntimeError("Kokoro produced no audio")
+        audio = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
 
-        # Write the EPUB bytes to a temp file so gradio_client can upload it
-        with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tmp:
-            tmp.write(epub_bytes)
-            epub_path = tmp.name
-
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            wav_path = Path(tmp.name)
         try:
-            client = Client(EBOOK2AUDIOBOOK_URL)
-            # ebook2audiobook's Gradio interface: first positional arg is the ebook file.
-            # Additional args (voice, language, custom_model, …) all have defaults so
-            # we only pass the ebook and the language.
-            result = client.predict(
-                ebook_file_input=handle_file(epub_path),
-                target_voice_file=None,
-                language=lang or "en",
-                use_custom_model=False,
-                custom_model_file=None,
-                custom_config_file=None,
-                custom_vocab_file=None,
-                custom_model_url="",
-                temperature=0.65,
-                length_penalty=1.0,
-                repetition_penalty=2.5,
-                top_k=50,
-                top_p=0.8,
-                speed=1.0,
-                enable_text_splitting=True,
-                api_name="/convert_ebook",
-            )
-            # result is a tuple; the audio file path is the first element
-            audio_result = result[0] if isinstance(result, (list, tuple)) else result
-            shutil.copy(str(audio_result), str(output_path))
+            sf.write(str(wav_path), audio, 24000)
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(wav_path),
+                "-codec:a",
+                "libmp3lame",
+                "-qscale:a",
+                "2",
+                str(output_path),
+            ]
+            result = subprocess.run(ffmpeg_cmd, capture_output=True)
+            if result.returncode != 0:
+                stderr = result.stderr.decode(errors="replace")
+                raise RuntimeError(f"ffmpeg failed encoding Kokoro output to mp3: {stderr[-2000:]}")
         finally:
-            Path(epub_path).unlink(missing_ok=True)
+            wav_path.unlink(missing_ok=True)
 
     await asyncio.to_thread(_run_sync)
 
 
-async def generate_audio(
-    job_id: str, text: str, lang: str, epub_bytes: bytes | None = None
-) -> Path:
+async def generate_audio(job_id: str, text: str, lang: str) -> Path:
     """Generate audio and return the path to the output file."""
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = AUDIO_DIR / f"{job_id}.mp3"
 
-    if TTS_ENGINE == "ebook2audiobook" and epub_bytes:
-        output_path = AUDIO_DIR / f"{job_id}.mp3"
-        await synthesize_ebook2audiobook(epub_bytes, output_path, lang=lang)
+    cleaned = _clean_markdown(text)
+    if not cleaned:
+        raise ValueError("No readable text found in bookmark article")
+
+    base_lang = (lang or "").split("-")[0].lower()
+    if TTS_ENGINE == "kokoro" and base_lang in KOKORO_SUPPORTED_LANGS:
+        await synthesize_kokoro(cleaned, output_path)
     else:
-        if TTS_ENGINE == "ebook2audiobook":
-            logger.warning(
-                "TTS_ENGINE=ebook2audiobook but no EPUB bytes available for job %s; "
-                "falling back to edge-tts",
-                job_id,
-            )
         voice = _pick_voice(lang)
-        output_path = AUDIO_DIR / f"{job_id}.mp3"
-        cleaned = _clean_markdown(text)
-        if not cleaned:
-            raise ValueError("No readable text found in bookmark article")
         await synthesize_edge_tts(cleaned, output_path, voice)
 
     return output_path

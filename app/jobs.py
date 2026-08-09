@@ -20,11 +20,7 @@ async def _process_job(job: dict):
         bookmark = await readeck.get_bookmark(job["bookmark_id"])
         lang = bookmark.get("lang", "")
 
-        epub_bytes = None
-        if tts.TTS_ENGINE == "ebook2audiobook":
-            epub_bytes = await readeck.get_article_epub(job["bookmark_id"])
-
-        audio_path = await tts.generate_audio(job_id, text, lang, epub_bytes)
+        audio_path = await tts.generate_audio(job_id, text, lang)
         await models.update_job(
             job_id,
             status=models.JobStatus.completed,

@@ -11,15 +11,14 @@ A lightweight web app that fetches bookmarks from a Readeck instance and generat
 - **Backend**: Python 3.12 + FastAPI (async, lightweight, built-in background tasks)
 - **Frontend**: Jinja2 templates + HTMX + Alpine.js (server-rendered, minimal JS footprint)
 - **TTS Engine**: `edge-tts` (Microsoft Edge TTS — free, no API key, high quality neural voices)
-  - Optional: ebook2audiobook as an alternative backend (heavier, supports voice cloning)
+  - Optional: Kokoro-82M as a higher-quality local neural backend (English only for now)
 - **Persistence**: SQLite via `aiosqlite` (no external DB dependency)
 - **Task execution**: FastAPI `BackgroundTasks` + asyncio queue (no Redis/Celery needed)
 - **Content fetching**: Readeck `/api/bookmarks/{id}/article` (HTML) → strip tags → TTS
-  - Or `/api/bookmarks/{id}/article.epub` if ebook2audiobook is selected
 
-### Why edge-tts over ebook2audiobook directly
+### Why edge-tts over a local neural model by default
 
-ebook2audiobook requires PyTorch + multi-GB model downloads, making the Docker image impractical (~10GB+). `edge-tts` is a thin Python wrapper around Microsoft's neural TTS service (used in Windows Narrator / Edge browser), produces high-quality results, requires no API key, and keeps the Docker image under 200MB. ebook2audiobook can be wired in as an optional `TTS_ENGINE=ebook2audiobook` mode pointing to a separately-hosted container.
+`edge-tts` is a thin Python wrapper around Microsoft's neural TTS service (used in Windows Narrator / Edge browser), produces high-quality results, requires no API key, and keeps the Docker image under 200MB. A local neural model (`TTS_ENGINE=kokoro`, using the small 82M-parameter Kokoro model) can be wired in as an optional mode, built on a separate `Dockerfile.kokoro` image variant so the default image stays lightweight.
 
 ---
 
@@ -30,7 +29,7 @@ readeck-audiobook/
 ├── app/
 │   ├── main.py           # FastAPI app, routes, startup
 │   ├── readeck.py        # Readeck API client (httpx)
-│   ├── tts.py            # TTS backends (edge-tts, ebook2audiobook stub)
+│   ├── tts.py            # TTS backends (edge-tts, kokoro)
 │   ├── jobs.py           # Job queue, worker loop, SQLite helpers
 │   ├── models.py         # Pydantic models + DB schema
 │   └── templates/
@@ -54,9 +53,9 @@ readeck-audiobook/
 |---|---|---|
 | `READECK_BASE_URL` | Yes | Readeck instance base URL (e.g. `https://readeck.example.com`) |
 | `READECK_API_TOKEN` | Yes | Readeck Bearer API token |
-| `TTS_ENGINE` | No | `edge-tts` (default) or `ebook2audiobook` |
+| `TTS_ENGINE` | No | `edge-tts` (default) or `kokoro` |
 | `EDGE_TTS_VOICE` | No | Voice name, e.g. `en-US-AriaNeural` (default) |
-| `EBOOK2AUDIOBOOK_URL` | No | URL of ebook2audiobook API when `TTS_ENGINE=ebook2audiobook` |
+| `KOKORO_VOICE` | No | Kokoro voice name (default `af_heart`), only used when `TTS_ENGINE=kokoro` |
 | `MAX_CONCURRENT_JOBS` | No | Max simultaneous TTS jobs (default: `2`) |
 | `PORT` | No | HTTP port (default: `8080`) |
 
@@ -122,10 +121,12 @@ CREATE TABLE jobs (
 - Voice auto-selected based on bookmark `lang` field if available, else falls back to `EDGE_TTS_VOICE`
 - Language-to-voice mapping: `en→en-US-AriaNeural`, `de→de-DE-KatjaNeural`, `fr→fr-FR-DeniseNeural`, etc.
 
-### ebook2audiobook (optional)
-- Sends the EPUB export (`GET /api/bookmarks/{id}/article.epub`) to the ebook2audiobook HTTP API
-- Polls for completion, downloads resulting audio
-- Requires `EBOOK2AUDIOBOOK_URL` env var pointing to a running ebook2audiobook container
+### kokoro (optional)
+- Local 82M-parameter neural model, run in-process (CUDA if available, else CPU)
+- Input: plain text string, same as edge-tts — no separate ebook export needed
+- English only for now; other languages fall back to edge-tts automatically
+- Requires an image built from `Dockerfile.kokoro` (adds `kokoro`/`torch`/`soundfile`,
+  kept out of the default `requirements.txt` to keep the base image lightweight)
 
 ---
 
@@ -169,7 +170,7 @@ volumes:
 1. **Project scaffolding** — `requirements.txt`, `Dockerfile`, `docker-compose.yml`
 2. **Database layer** (`models.py`, `jobs.py`) — SQLite schema, CRUD helpers using `aiosqlite`
 3. **Readeck client** (`readeck.py`) — `httpx.AsyncClient` wrapper for bookmark list + article fetch
-4. **TTS backends** (`tts.py`) — `edge-tts` implementation + ebook2audiobook stub
+4. **TTS backends** (`tts.py`) — `edge-tts` implementation + optional kokoro backend
 5. **Job worker** (`jobs.py`) — async queue, worker coroutine, text extraction from HTML/Markdown
 6. **FastAPI app** (`main.py`) — routes, background task startup, static files
 7. **Templates** — `base.html`, `index.html` (bookmark list with HTMX), `jobs.html` (status + download)

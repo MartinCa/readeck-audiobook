@@ -80,13 +80,3 @@ async def test_get_article_text_markdown_404_falls_back():
     )
     text = await readeck.get_article_text("abc123")
     assert "HTML content" in text
-
-
-@respx.mock
-async def test_get_article_epub():
-    epub_data = b"PK\x03\x04fake epub bytes"
-    respx.get("http://readeck.test/api/bookmarks/abc123/article.epub").mock(
-        return_value=httpx.Response(200, content=epub_data)
-    )
-    result = await readeck.get_article_epub("abc123")
-    assert result == epub_data

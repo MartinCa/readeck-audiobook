@@ -55,11 +55,3 @@ async def get_article_text(bookmark_id: str) -> str:
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         return soup.get_text(separator="\n", strip=True)
-
-
-async def get_article_epub(bookmark_id: str) -> bytes:
-    epub_headers = {**_headers, "Accept": "application/epub+zip"}
-    async with httpx.AsyncClient(headers=epub_headers, timeout=120) as client:
-        resp = await client.get(f"{READECK_BASE_URL}/api/bookmarks/{bookmark_id}/article.epub")
-        resp.raise_for_status()
-        return resp.content
