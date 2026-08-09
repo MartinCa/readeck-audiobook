@@ -99,6 +99,12 @@ Model weights (a few hundred MB) download from the Hugging Face Hub on first use
 
 To build the image yourself instead of pulling: `docker build -f Dockerfile.kokoro -t readeck-audiobook:kokoro .`
 
+**`[Errno 13] Permission denied: '/app/models/hub'`**: the container runs as an unprivileged `appuser` (uid 1001). If `kokoro_models` is a pre-existing volume that was first populated by an older image (or by a container running as root), it can retain root ownership, which blocks writes from `appuser`. Fix it once with:
+
+```sh
+docker run --rm -v kokoro_models:/data alpine chown -R 1001:1001 /data
+```
+
 ## Architecture
 
 ```

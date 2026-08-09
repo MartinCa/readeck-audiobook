@@ -133,6 +133,66 @@ async def test_delete_job_not_found():
     assert result is None
 
 
+async def test_get_active_job_for_bookmark_pending():
+    job = await models.create_job(
+        bookmark_id="bm1",
+        bookmark_title="Test",
+        bookmark_url="http://example.com",
+        tts_engine="edge-tts",
+        voice="en-US-AriaNeural",
+    )
+    active = await models.get_active_job_for_bookmark("bm1")
+    assert active["id"] == job["id"]
+
+
+async def test_get_active_job_for_bookmark_none_when_terminal():
+    job = await models.create_job(
+        bookmark_id="bm1",
+        bookmark_title="Test",
+        bookmark_url="http://example.com",
+        tts_engine="edge-tts",
+        voice="en-US-AriaNeural",
+    )
+    await models.update_job(job["id"], status=JobStatus.completed, audio_path="abc.mp3")
+    assert await models.get_active_job_for_bookmark("bm1") is None
+
+
+async def test_get_active_job_for_bookmark_not_found():
+    assert await models.get_active_job_for_bookmark("does-not-exist") is None
+
+
+async def test_reset_stale_processing_jobs():
+    job = await models.create_job(
+        bookmark_id="bm1",
+        bookmark_title="Test",
+        bookmark_url="http://example.com",
+        tts_engine="edge-tts",
+        voice="en-US-AriaNeural",
+    )
+    await models.claim_next_pending_job(max_concurrent=2)
+
+    reset_count = await models.reset_stale_processing_jobs()
+    assert reset_count == 1
+
+    updated = await models.get_job(job["id"])
+    assert updated["status"] == JobStatus.failed
+    assert updated["error_msg"] == "Interrupted by server restart"
+
+
+async def test_reset_stale_processing_jobs_leaves_others_alone():
+    await models.create_job(
+        bookmark_id="bm1",
+        bookmark_title="Test",
+        bookmark_url="http://example.com",
+        tts_engine="edge-tts",
+        voice="en-US-AriaNeural",
+    )
+    reset_count = await models.reset_stale_processing_jobs()
+    assert reset_count == 0
+    jobs, _ = await models.list_jobs()
+    assert jobs[0]["status"] == JobStatus.pending
+
+
 async def test_claim_next_pending_job():
     job = await models.create_job(
         bookmark_id="bm1",

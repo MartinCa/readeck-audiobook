@@ -72,6 +72,39 @@ async def test_post_jobs_multiple_bookmarks(client, monkeypatch):
     assert total == 3
 
 
+async def test_post_jobs_skips_duplicate_active_job(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.readeck.get_bookmark",
+        AsyncMock(return_value={"title": "My Article", "url": "http://example.com"}),
+    )
+    resp1 = await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
+    assert resp1.status_code == 200
+
+    resp2 = await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
+    assert resp2.status_code == 200
+    assert b"Skipped 1 already queued" in resp2.content
+
+    jobs, total = await models.list_jobs()
+    assert total == 1
+
+
+async def test_post_jobs_allows_requeue_after_completion(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.readeck.get_bookmark",
+        AsyncMock(return_value={"title": "My Article", "url": "http://example.com"}),
+    )
+    await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
+    jobs, _ = await models.list_jobs()
+    await models.update_job(jobs[0]["id"], status=models.JobStatus.completed, audio_path="a.mp3")
+
+    resp = await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
+    assert resp.status_code == 200
+    assert b"Queued 1 job" in resp.content
+
+    _, total = await models.list_jobs()
+    assert total == 2
+
+
 async def test_delete_job(client):
     job = await models.create_job(
         bookmark_id="bm1",

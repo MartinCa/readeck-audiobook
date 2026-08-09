@@ -23,6 +23,11 @@ async def lifespan(app: FastAPI):
     if missing:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
     await models.init_db()
+    reset_count = await models.reset_stale_processing_jobs()
+    if reset_count:
+        logger.warning(
+            "Reset %d job(s) stuck in 'processing' from a previous run", reset_count
+        )
     jobs.start_worker()
     yield
     jobs.stop_worker()
@@ -86,7 +91,13 @@ async def jobs_page(request: Request, page: int = 1):
 @app.post("/jobs", response_class=HTMLResponse)
 async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
     created = []
+    skipped = 0
     for bid in bookmark_ids:
+        if await models.get_active_job_for_bookmark(bid):
+            # Already queued or in progress — skip to avoid duplicate jobs
+            # piling up when a bookmark is submitted more than once.
+            skipped += 1
+            continue
         try:
             bm = await readeck.get_bookmark(bid)
             title = bm.get("title", bid)
@@ -105,6 +116,9 @@ async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
 
     job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE)
     total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
+    flash = f"Queued {len(created)} job(s)."
+    if skipped:
+        flash += f" Skipped {skipped} already queued or in progress."
     return templates.TemplateResponse(
         request,
         "jobs.html",
@@ -113,7 +127,7 @@ async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
             "current_page": 1,
             "total_pages": total_pages,
             "total": total,
-            "flash": f"Queued {len(created)} job(s).",
+            "flash": flash,
         },
     )
 
