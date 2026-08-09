@@ -403,11 +403,7 @@ def _get_kokoro_tts():
             ),
             provider=provider,
             num_threads=config.KOKORO_NUM_THREADS,
-            # sherpa-onnx has no equivalent of torch.cuda.is_available(): when the
-            # CUDA execution provider fails to register it falls back to CPU
-            # without complaint. Its debug output naming the providers that did
-            # register is the only reliable signal, so enable it for CUDA.
-            debug=provider == "cuda",
+            debug=config.KOKORO_DEBUG,
         )
         # No max_num_sentences here: sherpa-onnx ignores it for Kokoro models and
         # logs a warning for any value but the default. Kokoro does its own
@@ -427,10 +423,13 @@ def _get_kokoro_tts():
                 len(KOKORO_VOICES),
                 _kokoro_tts.num_speakers,
             )
-        if provider == "cuda":
+        if provider == "cuda" and not config.KOKORO_DEBUG:
+            # sherpa-onnx has no equivalent of torch.cuda.is_available(): when the
+            # CUDA execution provider fails to register it falls back to CPU
+            # without complaint, and its debug output is the only reliable signal.
             logger.info(
-                "CUDA requested — check the sherpa-onnx debug output above for the "
-                "execution providers that actually registered; it falls back to CPU silently."
+                "CUDA requested. sherpa-onnx falls back to CPU silently if the provider "
+                "fails to register — set KOKORO_DEBUG=1 to have it log which providers did."
             )
     return _kokoro_tts
 
@@ -446,6 +445,16 @@ async def synthesize_kokoro(text: str, output_path: Path, voice: str = ""):
     voice = voice or config.KOKORO_VOICE
     sid = resolve_kokoro_sid(voice)
 
+    # Synthesized in pieces for the same reason edge-tts is, plus one specific to
+    # a local model: Kokoro returns the whole waveform as one in-memory array, so
+    # a long article means hundreds of MB of float samples in a single
+    # allocation. Feeding a full-length article in one call got the container
+    # killed outright — no Python exception, just a dead process and a job that
+    # burned all its attempts.
+    chunks = _split_text(text, config.TTS_CHUNK_CHARS)
+    if not chunks:
+        raise ValueError("No readable text to synthesize")
+
     def _run_sync():
         engine = _get_kokoro_tts()
         if sid >= engine.num_speakers:
@@ -456,15 +465,36 @@ async def synthesize_kokoro(text: str, output_path: Path, voice: str = ""):
         gen_config = sherpa_onnx.GenerationConfig()
         gen_config.sid = sid
         gen_config.speed = 1.0
-        with _kokoro_lock:
-            audio = engine.generate(text, gen_config)
-        if audio.sample_rate <= 0 or len(audio.samples) == 0:
-            raise RuntimeError("Kokoro produced no audio")
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             wav_path = Path(tmp.name)
         try:
-            sf.write(str(wav_path), audio.samples, audio.sample_rate)
+            # Appended to the WAV as each piece is produced rather than
+            # concatenated at the end, so peak memory stays at one chunk of audio
+            # however long the article is.
+            writer = None
+            try:
+                for index, chunk in enumerate(chunks, 1):
+                    with _kokoro_lock:
+                        audio = engine.generate(chunk, gen_config)
+                    if audio.sample_rate <= 0 or len(audio.samples) == 0:
+                        raise RuntimeError(
+                            f"Kokoro produced no audio for chunk {index}/{len(chunks)}"
+                        )
+                    if writer is None:
+                        writer = sf.SoundFile(
+                            str(wav_path),
+                            mode="w",
+                            samplerate=audio.sample_rate,
+                            channels=1,
+                            subtype="PCM_16",
+                        )
+                    writer.write(audio.samples)
+                    del audio
+            finally:
+                if writer is not None:
+                    writer.close()
+
             ffmpeg_cmd = [
                 "ffmpeg",
                 "-y",

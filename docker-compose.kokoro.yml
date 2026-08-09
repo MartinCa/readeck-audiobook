@@ -25,6 +25,9 @@ services:
       KOKORO_VOICE: ${KOKORO_VOICE:-af_heart}
       KOKORO_PROVIDER: ${KOKORO_PROVIDER:-cuda}
       KOKORO_NUM_THREADS: ${KOKORO_NUM_THREADS:-2}
+      # Set to 1 once to confirm CUDA registered, then unset — it also logs the
+      # full text of every article.
+      KOKORO_DEBUG: ${KOKORO_DEBUG:-}
       EDGE_TTS_VOICE: ${EDGE_TTS_VOICE:-en-US-AriaNeural}
       MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-2}
       # Unauthenticated unless both are set — see README.

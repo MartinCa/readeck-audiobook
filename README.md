@@ -142,7 +142,7 @@ docker build -f Dockerfile.kokoro -t readeck-audiobook:kokoro .
 docker build -f Dockerfile.kokoro --build-arg KOKORO_ACCEL=cuda -t readeck-audiobook:kokoro-cuda .
 ```
 
-**Verifying the GPU is actually in use.** sherpa-onnx falls back to CPU silently when the CUDA execution provider fails to register — there is no `torch.cuda.is_available()` equivalent to log. The image therefore turns on sherpa-onnx's own debug output whenever `KOKORO_PROVIDER=cuda`; check the container logs on the first synthesis for the list of providers that registered.
+**Verifying the GPU is actually in use.** sherpa-onnx falls back to CPU silently when the CUDA execution provider fails to register — there is no `torch.cuda.is_available()` equivalent to log. Set `KOKORO_DEBUG=1` and check the container logs on the first synthesis for the list of providers that registered, then turn it back off: that flag also makes sherpa-onnx dump the full text of every article to the log, twice (once as hex).
 
 **`Failed to load library libonnxruntime_providers_cuda.so with error: lib*.so: cannot open shared object file`**: the CUDA build of sherpa-onnx does not bundle the CUDA runtime — unlike the old torch wheels, which did. Those libraries come from the `nvidia-*-cu12` wheels in `requirements-kokoro-cuda.txt`, whose directories `Dockerfile.kokoro` registers with `ldconfig`. If a job fails this way, a library is missing from that list: add the matching wheel (the name follows the library, e.g. `libcurand.so.10` → `nvidia-curand-cu12`) and rebuild. The image build runs `ldd` over the provider and fails if anything is unresolved, so this should be caught at build time rather than on the first job.
 

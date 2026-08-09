@@ -278,17 +278,29 @@ class TestSynthesizeKokoro:
                 seen["text"] = text
                 seen["sid"] = gen_config.sid
                 seen["speed"] = gen_config.speed
+                seen.setdefault("generated", []).append(text)
                 return seen.get("audio", FakeAudio())
 
         sherpa = types.ModuleType("sherpa_onnx")
         sherpa.GenerationConfig = type("GenerationConfig", (), {})
 
-        def fake_write(path, samples, sample_rate):
-            seen["wav"] = (samples, sample_rate)
-            Path(path).write_bytes(b"wav")
+        class FakeSoundFile:
+            """Stands in for the streaming writer the real code appends to."""
+
+            def __init__(self, path, mode, samplerate, channels, subtype):
+                seen["wav"] = (samplerate, channels, subtype)
+                seen["writes"] = []
+                self._path = Path(path)
+                self._path.write_bytes(b"wav")
+
+            def write(self, samples):
+                seen["writes"].append(samples)
+
+            def close(self):
+                seen["closed"] = True
 
         soundfile = types.ModuleType("soundfile")
-        soundfile.write = fake_write
+        soundfile.SoundFile = FakeSoundFile
 
         def fake_run(cmd, capture_output=False):
             seen["ffmpeg"] = cmd
@@ -309,8 +321,52 @@ class TestSynthesizeKokoro:
     async def test_uses_the_sample_rate_the_engine_reports(self, tmp_path, fake_sherpa):
         out = tmp_path / "out.mp3"
         await tts.synthesize_kokoro("Hello world", out, "af_heart")
-        assert fake_sherpa["wav"][1] == 22050
+        assert fake_sherpa["wav"][0] == 22050
         assert out.read_bytes() == b"mp3"
+
+    async def test_long_text_is_synthesized_in_pieces(self, tmp_path, fake_sherpa, monkeypatch):
+        """A full-length article in one generate() call returns the entire waveform
+        as one array — hundreds of MB — which got the container OOM-killed."""
+        monkeypatch.setattr(tts.config, "TTS_CHUNK_CHARS", 200)
+        text = "\n\n".join(
+            f"Paragraph number {i} with enough words to matter." * 3 for i in range(20)
+        )
+        await tts.synthesize_kokoro(text, tmp_path / "out.mp3", "af_heart")
+
+        assert len(fake_sherpa["generated"]) > 1
+        assert all(len(c) <= 200 for c in fake_sherpa["generated"])
+        # every piece appended to the one open file, not concatenated in memory
+        assert len(fake_sherpa["writes"]) == len(fake_sherpa["generated"])
+        assert fake_sherpa["closed"] is True
+
+    async def test_short_text_stays_a_single_call(self, tmp_path, fake_sherpa):
+        await tts.synthesize_kokoro("Hello world", tmp_path / "out.mp3", "af_heart")
+        assert len(fake_sherpa["generated"]) == 1
+
+    async def test_the_writer_is_closed_when_a_later_chunk_fails(
+        self, tmp_path, fake_sherpa, monkeypatch
+    ):
+        """Failing mid-article leaves a writer open; a leaked handle would keep the
+        temp WAV unflushed and the fd held until GC."""
+        monkeypatch.setattr(tts.config, "TTS_CHUNK_CHARS", 200)
+
+        class Boom:
+            num_speakers = len(tts.KOKORO_VOICES)
+
+            def __init__(self):
+                self.calls = 0
+
+            def generate(self, text, cfg):
+                self.calls += 1
+                if self.calls > 1:
+                    raise RuntimeError("engine exploded")
+                return type("A", (), {"samples": [0.0], "sample_rate": 22050})()
+
+        monkeypatch.setattr(tts, "_get_kokoro_tts", Boom)
+        text = "\n\n".join(f"Paragraph {i} with plenty of words in it." * 3 for i in range(10))
+        with pytest.raises(RuntimeError, match="engine exploded"):
+            await tts.synthesize_kokoro(text, tmp_path / "out.mp3", "af_heart")
+        assert fake_sherpa["closed"] is True
 
     async def test_blank_voice_falls_back_to_config(self, tmp_path, fake_sherpa, monkeypatch):
         monkeypatch.setattr(tts.config, "KOKORO_VOICE", "bf_emma")
