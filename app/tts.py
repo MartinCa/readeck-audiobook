@@ -75,9 +75,23 @@ def _get_kokoro_pipeline():
     """Lazily construct and cache the Kokoro pipeline (loads the model once per process)."""
     global _kokoro_pipeline
     if _kokoro_pipeline is None:
+        import torch
         from kokoro import KPipeline
 
         _kokoro_pipeline = KPipeline(lang_code=KOKORO_LANG_CODE)
+        device = _kokoro_pipeline.model.device
+        if device.type == "cuda":
+            logger.info(
+                "Kokoro model loaded on CUDA device %s (%s)",
+                device.index or 0,
+                torch.cuda.get_device_name(device),
+            )
+        else:
+            logger.info(
+                "Kokoro model loaded on %s (CUDA available: %s)",
+                device,
+                torch.cuda.is_available(),
+            )
     return _kokoro_pipeline
 
 
