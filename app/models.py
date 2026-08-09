@@ -97,6 +97,14 @@ async def delete_job(job_id: str) -> dict | None:
     return job
 
 
+async def list_job_ids() -> list[str]:
+    """Return every job id, unpaginated (used for "select all" bulk actions)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id FROM jobs ORDER BY created_at DESC") as cur:
+            rows = await cur.fetchall()
+            return [row[0] for row in rows]
+
+
 async def get_active_job_for_bookmark(bookmark_id: str) -> dict | None:
     """Return the most recent pending/processing job for a bookmark, if any."""
     async with aiosqlite.connect(DB_PATH) as db:

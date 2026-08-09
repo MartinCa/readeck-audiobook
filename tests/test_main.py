@@ -115,13 +115,79 @@ async def test_delete_job(client):
     )
     resp = await client.delete(f"/jobs/{job['id']}")
     assert resp.status_code == 200
-    assert resp.json()["ok"] is True
+    # Empty body so htmx's outerHTML swap removes the card instead of
+    # inserting a stray JSON blob into the page.
+    assert resp.content == b""
     assert await models.get_job(job["id"]) is None
 
 
 async def test_delete_job_not_found(client):
     resp = await client.delete("/jobs/does-not-exist")
     assert resp.status_code == 404
+
+
+async def test_bulk_delete_jobs(client):
+    job1 = await models.create_job(
+        bookmark_id="bm1",
+        bookmark_title="Test 1",
+        bookmark_url="http://example.com",
+        tts_engine="edge-tts",
+        voice="en-US-AriaNeural",
+    )
+    job2 = await models.create_job(
+        bookmark_id="bm2",
+        bookmark_title="Test 2",
+        bookmark_url="http://example.com",
+        tts_engine="edge-tts",
+        voice="en-US-AriaNeural",
+    )
+    job3 = await models.create_job(
+        bookmark_id="bm3",
+        bookmark_title="Test 3",
+        bookmark_url="http://example.com",
+        tts_engine="edge-tts",
+        voice="en-US-AriaNeural",
+    )
+
+    resp = await client.post("/jobs/bulk-delete", data={"job_ids": [job1["id"], job2["id"]]})
+    assert resp.status_code == 200
+    assert b"Deleted 2 job(s)" in resp.content
+
+    assert await models.get_job(job1["id"]) is None
+    assert await models.get_job(job2["id"]) is None
+    assert await models.get_job(job3["id"]) is not None
+
+
+async def test_bulk_delete_jobs_ignores_unknown_ids(client):
+    resp = await client.post("/jobs/bulk-delete", data={"job_ids": ["nope"]})
+    assert resp.status_code == 200
+    assert b"Deleted 0 job(s)" in resp.content
+
+
+async def test_bulk_delete_jobs_no_ids(client):
+    resp = await client.post("/jobs/bulk-delete", data={})
+    assert resp.status_code == 200
+    assert b"Deleted 0 job(s)" in resp.content
+
+
+async def test_api_job_ids(client):
+    job1 = await models.create_job(
+        bookmark_id="bm1",
+        bookmark_title="Test 1",
+        bookmark_url="http://example.com",
+        tts_engine="edge-tts",
+        voice="en-US-AriaNeural",
+    )
+    job2 = await models.create_job(
+        bookmark_id="bm2",
+        bookmark_title="Test 2",
+        bookmark_url="http://example.com",
+        tts_engine="edge-tts",
+        voice="en-US-AriaNeural",
+    )
+    resp = await client.get("/api/jobs/ids")
+    assert resp.status_code == 200
+    assert set(resp.json()) == {job1["id"], job2["id"]}
 
 
 async def test_audio_not_found(client):

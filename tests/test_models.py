@@ -133,6 +133,24 @@ async def test_delete_job_not_found():
     assert result is None
 
 
+async def test_list_job_ids():
+    ids = []
+    for i in range(3):
+        job = await models.create_job(
+            bookmark_id=f"bm{i}",
+            bookmark_title=f"Article {i}",
+            bookmark_url="http://example.com",
+            tts_engine="edge-tts",
+            voice="en-US-AriaNeural",
+        )
+        ids.append(job["id"])
+    assert set(await models.list_job_ids()) == set(ids)
+
+
+async def test_list_job_ids_empty():
+    assert await models.list_job_ids() == []
+
+
 async def test_get_active_job_for_bookmark_pending():
     job = await models.create_job(
         bookmark_id="bm1",

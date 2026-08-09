@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -25,9 +25,7 @@ async def lifespan(app: FastAPI):
     await models.init_db()
     reset_count = await models.reset_stale_processing_jobs()
     if reset_count:
-        logger.warning(
-            "Reset %d job(s) stuck in 'processing' from a previous run", reset_count
-        )
+        logger.warning("Reset %d job(s) stuck in 'processing' from a previous run", reset_count)
     jobs.start_worker()
     yield
     jobs.stop_worker()
@@ -132,16 +130,45 @@ async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
     )
 
 
-@app.delete("/jobs/{job_id}")
-async def delete_job(job_id: str):
+async def _delete_job_and_audio(job_id: str) -> dict | None:
     job = await models.delete_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.get("audio_path"):
+    if job and job.get("audio_path"):
         audio_file = AUDIO_DIR / job["audio_path"]
         if audio_file.exists():
             audio_file.unlink()
-    return JSONResponse({"ok": True})
+    return job
+
+
+@app.delete("/jobs/{job_id}")
+async def delete_job(job_id: str):
+    job = await _delete_job_and_audio(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    # Empty body: hx-swap="outerHTML" on the caller removes the job card
+    # cleanly instead of swapping in a JSON blob.
+    return HTMLResponse(content="")
+
+
+@app.post("/jobs/bulk-delete", response_class=HTMLResponse)
+async def bulk_delete_jobs(request: Request, job_ids: list[str] = Form(default=[])):
+    deleted = 0
+    for job_id in job_ids:
+        if await _delete_job_and_audio(job_id):
+            deleted += 1
+
+    job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE)
+    total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
+    return templates.TemplateResponse(
+        request,
+        "jobs.html",
+        {
+            "jobs": job_list,
+            "current_page": 1,
+            "total_pages": total_pages,
+            "total": total,
+            "flash": f"Deleted {deleted} job(s).",
+        },
+    )
 
 
 # ── API endpoints ──────────────────────────────────────────────────────────────
@@ -159,6 +186,11 @@ async def job_status(job_id: str):
 async def api_jobs():
     job_list, _ = await models.list_jobs()
     return job_list
+
+
+@app.get("/api/jobs/ids")
+async def api_job_ids():
+    return await models.list_job_ids()
 
 
 # ── File download ──────────────────────────────────────────────────────────────
