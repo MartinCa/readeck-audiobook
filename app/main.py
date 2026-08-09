@@ -2,9 +2,10 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -23,6 +24,9 @@ async def lifespan(app: FastAPI):
     if missing:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
     await models.init_db()
+    reset_count = await models.reset_stale_processing_jobs()
+    if reset_count:
+        logger.warning("Reset %d job(s) stuck in 'processing' from a previous run", reset_count)
     jobs.start_worker()
     yield
     jobs.stop_worker()
@@ -64,7 +68,7 @@ JOBS_PER_PAGE = 50
 
 
 @app.get("/jobs", response_class=HTMLResponse)
-async def jobs_page(request: Request, page: int = 1):
+async def jobs_page(request: Request, page: int = 1, flash: str = ""):
     offset = (page - 1) * JOBS_PER_PAGE
     job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE, offset=offset)
     total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
@@ -76,6 +80,7 @@ async def jobs_page(request: Request, page: int = 1):
             "current_page": page,
             "total_pages": total_pages,
             "total": total,
+            "flash": flash,
         },
     )
 
@@ -83,10 +88,16 @@ async def jobs_page(request: Request, page: int = 1):
 # ── Actions ────────────────────────────────────────────────────────────────────
 
 
-@app.post("/jobs", response_class=HTMLResponse)
-async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
+@app.post("/jobs")
+async def create_jobs(bookmark_ids: list[str] = Form(...)):
     created = []
+    skipped = 0
     for bid in bookmark_ids:
+        if await models.get_active_job_for_bookmark(bid):
+            # Already queued or in progress — skip to avoid duplicate jobs
+            # piling up when a bookmark is submitted more than once.
+            skipped += 1
+            continue
         try:
             bm = await readeck.get_bookmark(bid)
             title = bm.get("title", bid)
@@ -103,31 +114,45 @@ async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
         )
         created.append(job)
 
-    job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE)
-    total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
-    return templates.TemplateResponse(
-        request,
-        "jobs.html",
-        {
-            "jobs": job_list,
-            "current_page": 1,
-            "total_pages": total_pages,
-            "total": total,
-            "flash": f"Queued {len(created)} job(s).",
-        },
-    )
+    flash = f"Queued {len(created)} job(s)."
+    if skipped:
+        flash += f" Skipped {skipped} already queued or in progress."
+    # Redirect (Post/Redirect/Get) rather than rendering the jobs page
+    # directly: if we rendered it here, the browser's current document
+    # would be POST-derived, and the jobs page's own periodic reload (used
+    # to refresh status) would then *resubmit that same POST* instead of
+    # doing a plain GET — silently re-queuing the same bookmarks forever.
+    return RedirectResponse(url=f"/jobs?flash={quote(flash)}", status_code=303)
+
+
+async def _delete_job_and_audio(job_id: str) -> dict | None:
+    job = await models.delete_job(job_id)
+    if job and job.get("audio_path"):
+        audio_file = AUDIO_DIR / job["audio_path"]
+        if audio_file.exists():
+            audio_file.unlink()
+    return job
 
 
 @app.delete("/jobs/{job_id}")
 async def delete_job(job_id: str):
-    job = await models.delete_job(job_id)
+    job = await _delete_job_and_audio(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.get("audio_path"):
-        audio_file = AUDIO_DIR / job["audio_path"]
-        if audio_file.exists():
-            audio_file.unlink()
-    return JSONResponse({"ok": True})
+    # Empty body: hx-swap="outerHTML" on the caller removes the job card
+    # cleanly instead of swapping in a JSON blob.
+    return HTMLResponse(content="")
+
+
+@app.post("/jobs/bulk-delete")
+async def bulk_delete_jobs(job_ids: list[str] = Form(default=[])):
+    deleted = 0
+    for job_id in job_ids:
+        if await _delete_job_and_audio(job_id):
+            deleted += 1
+
+    flash = quote(f"Deleted {deleted} job(s).")
+    return RedirectResponse(url=f"/jobs?flash={flash}", status_code=303)
 
 
 # ── API endpoints ──────────────────────────────────────────────────────────────
@@ -145,6 +170,11 @@ async def job_status(job_id: str):
 async def api_jobs():
     job_list, _ = await models.list_jobs()
     return job_list
+
+
+@app.get("/api/jobs/ids")
+async def api_job_ids():
+    return await models.list_job_ids()
 
 
 # ── File download ──────────────────────────────────────────────────────────────

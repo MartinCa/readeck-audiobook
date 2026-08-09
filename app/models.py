@@ -97,6 +97,48 @@ async def delete_job(job_id: str) -> dict | None:
     return job
 
 
+async def list_job_ids() -> list[str]:
+    """Return every job id, unpaginated (used for "select all" bulk actions)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id FROM jobs ORDER BY created_at DESC") as cur:
+            rows = await cur.fetchall()
+            return [row[0] for row in rows]
+
+
+async def get_active_job_for_bookmark(bookmark_id: str) -> dict | None:
+    """Return the most recent pending/processing job for a bookmark, if any."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM jobs WHERE bookmark_id = ? AND status IN (?, ?) "
+            "ORDER BY created_at DESC LIMIT 1",
+            (bookmark_id, JobStatus.pending, JobStatus.processing),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def reset_stale_processing_jobs() -> int:
+    """Fail any jobs left 'processing' from a previous run.
+
+    A job stuck in 'processing' has no worker coroutine left to finish it
+    after a restart, and would otherwise count against MAX_CONCURRENT_JOBS
+    forever, wedging the whole queue. Returns the number of jobs reset.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE jobs SET status = ?, error_msg = ?, updated_at = ? WHERE status = ?",
+            (
+                JobStatus.failed,
+                "Interrupted by server restart",
+                datetime.now(UTC).isoformat(),
+                JobStatus.processing,
+            ),
+        )
+        await db.commit()
+        return cursor.rowcount
+
+
 async def claim_next_pending_job(max_concurrent: int) -> dict | None:
     """Atomically claim the next pending job if fewer than max_concurrent are running.
 

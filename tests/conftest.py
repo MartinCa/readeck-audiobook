@@ -34,5 +34,9 @@ async def client(tmp_path, monkeypatch):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
+        # POST /jobs and /jobs/bulk-delete respond with a redirect (PRG
+        # pattern); follow it so callers see the resulting jobs page like a
+        # browser would.
+        follow_redirects=True,
     ) as c:
         yield c
