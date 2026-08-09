@@ -1,19 +1,20 @@
 {% extends "base.html" %}
+{% from "_pagination.html" import pagination %}
 {% block title %}Jobs – Readeck Audiobook{% endblock %}
 
 {% block content %}
-<div class="toolbar">
-  <h1 style="font-size:1.4rem;">Audio Generation Jobs</h1>
-  <span class="spacer"></span>
-  <span class="meta">{{ total }} job{{ 's' if total != 1 }}</span>
-</div>
+<div x-data="jobsPage({{ total }})" x-init="init()">
+  <div class="toolbar">
+    <h1 style="font-size:1.4rem;">Audio Generation Jobs</h1>
+    <span class="spacer"></span>
+    <span class="meta" x-text="total + (total === 1 ? ' job' : ' jobs')">{{ total }} job{{ 's' if total != 1 }}</span>
+  </div>
 
-{% if flash %}
-<div class="flash">{{ flash }}</div>
-{% endif %}
+  {% if flash %}
+  <div class="flash">{{ flash }}</div>
+  {% endif %}
 
-{% if jobs %}
-<div x-data="jobSelection({{ total }})">
+  {% if jobs %}
   <div class="toolbar">
     <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;">
       <input type="checkbox" :checked="pageAllSelected" @change="togglePage($event.target.checked)" />
@@ -21,7 +22,7 @@
     </label>
     <button type="button" class="btn btn-sm" style="background:#e2e8f0;color:#1a1a1a;"
             x-show="selected.length < total && pageAllSelected" @click="selectAll()">
-      Select all {{ total }} jobs
+      Select all <span x-text="total"></span> jobs
     </button>
     <button type="button" class="btn btn-sm" style="background:#e2e8f0;color:#1a1a1a;"
             x-show="selected.length > 0" @click="clearSelection()">
@@ -39,135 +40,206 @@
 
   <div class="grid" id="jobs-list">
     {% for job in jobs %}
-    <div class="card" id="job-{{ job.id }}"
-         {% if job.status in ('pending', 'processing') %}
-         hx-get="/api/jobs/{{ job.id }}/status"
-         hx-trigger="every 4s"
-         hx-swap="none"
-         {% endif %}>
+    <div class="card" id="job-{{ job.id }}" data-job-id="{{ job.id }}" data-status="{{ job.status }}">
       <div style="display:flex;gap:0.75rem;align-items:flex-start;">
         <input type="checkbox" value="{{ job.id }}" x-model="selected"
                style="margin-top:0.25rem;flex-shrink:0;width:1rem;height:1rem;" />
         <div style="flex:1;min-width:0;">
           <div class="title">{{ job.bookmark_title or job.bookmark_id }}</div>
           <div class="meta">
-            {% if job.bookmark_url %}
-              <a href="{{ job.bookmark_url }}" target="_blank" rel="noopener">{{ job.bookmark_url[:60] }}{% if job.bookmark_url|length > 60 %}…{% endif %}</a> ·
+            {% set link = job.bookmark_url | safe_url %}
+            {% if link %}
+              <a href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ link[:60] }}{% if link|length > 60 %}…{% endif %}</a> ·
             {% endif %}
-            {{ job.tts_engine }} · {{ job.created_at[:16] | replace('T', ' ') }}
+            {{ job.tts_engine }}{% if job.voice %} ({{ job.voice }}){% endif %} · {{ job.created_at[:16] | replace('T', ' ') }}
           </div>
-          {% if job.error_msg %}
-          <div style="font-size:0.82rem;color:#dc2626;margin-top:0.4rem;">{{ job.error_msg }}</div>
-          {% endif %}
+          <div data-role="error" style="font-size:0.82rem;color:#dc2626;margin-top:0.4rem;"
+               {% if not job.error_msg %}hidden{% endif %}>{{ job.error_msg or '' }}</div>
         </div>
         <div style="display:flex;gap:0.5rem;align-items:center;flex-shrink:0;">
-          <span class="badge badge-{{ job.status }}">{{ job.status }}</span>
-          {% if job.status == 'completed' and job.audio_path %}
-          <a href="/audio/{{ job.audio_path }}" class="btn btn-primary btn-sm" download>⬇ Download</a>
-          {% endif %}
-          <button class="btn btn-danger btn-sm"
-                  hx-delete="/jobs/{{ job.id }}"
-                  hx-confirm="Delete this job and its audio file?"
-                  hx-target="#job-{{ job.id }}"
-                  hx-swap="outerHTML">✕</button>
+          <span class="badge badge-{{ job.status }}" data-role="badge">{{ job.status }}</span>
+          <span data-role="actions" style="display:flex;gap:0.5rem;">
+            {% if job.status == 'completed' and job.audio_path %}
+            <a href="/audio/{{ job.audio_path | urlencode }}" class="btn btn-primary btn-sm"
+               data-role="download" download>⬇ Download</a>
+            {% endif %}
+          </span>
+          <button type="button" class="btn btn-danger btn-sm"
+                  @click="deleteJob('{{ job.id }}')">✕</button>
         </div>
       </div>
     </div>
     {% endfor %}
   </div>
-</div>
-{% if total_pages > 1 %}
-<div class="pagination">
-  {% if current_page > 1 %}
-    <a href="/jobs?page={{ current_page - 1 }}">← Prev</a>
-  {% endif %}
-  {% for p in range(1, total_pages + 1) %}
-    {% if p == current_page %}
-      <a href="/jobs?page={{ p }}" class="active">{{ p }}</a>
-    {% elif p <= 3 or p >= total_pages - 2 or (p >= current_page - 1 and p <= current_page + 1) %}
-      <a href="/jobs?page={{ p }}">{{ p }}</a>
-    {% elif p == 4 or p == total_pages - 3 %}
-      <span style="padding:0 0.25rem;">…</span>
-    {% endif %}
-  {% endfor %}
-  {% if current_page < total_pages %}
-    <a href="/jobs?page={{ current_page + 1 }}">Next →</a>
-  {% endif %}
-</div>
-{% endif %}
 
-{% else %}
-<div class="card" style="text-align:center;padding:3rem;color:#64748b;">
-  No jobs yet. Go to <a href="/">Bookmarks</a> to queue some.
+  {{ pagination(current_page, total_pages, "/jobs") }}
+
+  {% else %}
+  <div class="card" style="text-align:center;padding:3rem;color:#64748b;">
+    No jobs yet. Go to <a href="/">Bookmarks</a> to queue some.
+  </div>
+  {% endif %}
 </div>
-{% endif %}
 
 <script>
 // Navigate to the current jobs page with a plain GET, dropping any stale
 // ?flash= param. Deliberately not window.location.reload(): reload()
 // replays the page's *original* request verbatim, and if that request was
 // the "Generate audio" form's POST /jobs, reload() would silently
-// resubmit it — re-queuing the same bookmarks every time a job finishes.
+// resubmit it — re-queuing the same bookmarks.
 function refreshJobsPage() {
   const url = new URL(window.location.href);
   url.searchParams.delete("flash");
   window.location.assign(url.pathname + url.search);
 }
 
-function jobSelection(total) {
+const POLL_INTERVAL_MS = 4000;
+const ACTIVE_STATUSES = ["pending", "processing"];
+
+function jobsPage(total) {
   return {
     selected: [],
     total: total,
+    timer: null,
+
+    init() {
+      this.start();
+      // Don't keep polling a tab nobody is looking at.
+      document.addEventListener("visibilitychange", () => {
+        document.hidden ? this.stop() : this.start();
+      });
+    },
+
+    cards() {
+      return Array.from(document.querySelectorAll("#jobs-list .card"));
+    },
     get pageIds() {
-      return Array.from(document.querySelectorAll('#jobs-list input[type=checkbox]')).map(el => el.value);
+      return this.cards().map((c) => c.dataset.jobId);
     },
     get pageAllSelected() {
       const ids = this.pageIds;
-      return ids.length > 0 && ids.every(id => this.selected.includes(id));
+      return ids.length > 0 && ids.every((id) => this.selected.includes(id));
     },
+    activeIds() {
+      return this.cards()
+        .filter((c) => ACTIVE_STATUSES.includes(c.dataset.status))
+        .map((c) => c.dataset.jobId);
+    },
+
     togglePage(checked) {
       const ids = this.pageIds;
-      if (checked) {
-        this.selected = Array.from(new Set([...this.selected, ...ids]));
-      } else {
-        this.selected = this.selected.filter(id => !ids.includes(id));
-      }
+      this.selected = checked
+        ? Array.from(new Set([...this.selected, ...ids]))
+        : this.selected.filter((id) => !ids.includes(id));
     },
     async selectAll() {
-      const resp = await fetch('/api/jobs/ids');
-      this.selected = await resp.json();
+      const resp = await fetch("/api/jobs/ids", { headers: { Accept: "application/json" } });
+      if (resp.ok) this.selected = await resp.json();
     },
     clearSelection() {
       this.selected = [];
     },
+
+    // ── Status polling ────────────────────────────────────────────────────
+    // One request per interval for every active card, patched into the page
+    // in place. Giving each card its own timer meant one request per job
+    // every few seconds, and reloading the whole page whenever any single job
+    // finished — which threw away the user's selection and scroll position.
+    start() {
+      if (this.timer || !this.activeIds().length) return;
+      this.timer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
+    },
+    stop() {
+      if (this.timer) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+    },
+    async poll() {
+      const ids = this.activeIds();
+      if (!ids.length) {
+        this.stop();
+        return;
+      }
+      let data;
+      try {
+        const resp = await fetch("/api/jobs/statuses?ids=" + encodeURIComponent(ids.join(",")), {
+          headers: { Accept: "application/json" },
+        });
+        if (!resp.ok) return;
+        data = await resp.json();
+      } catch (err) {
+        return; // transient network error — try again next tick
+      }
+      Object.entries(data.jobs || {}).forEach(([id, job]) => this.applyStatus(id, job));
+      (data.missing || []).forEach((id) => this.dropCard(id));
+      if (!this.activeIds().length) this.stop();
+    },
+    applyStatus(id, job) {
+      const card = document.getElementById("job-" + id);
+      if (!card || card.dataset.status === job.status) return;
+      card.dataset.status = job.status;
+
+      const badge = card.querySelector("[data-role=badge]");
+      if (badge) {
+        badge.textContent = job.status;
+        badge.className = "badge badge-" + job.status;
+      }
+
+      const actions = card.querySelector("[data-role=actions]");
+      if (job.status === "completed" && job.audio_path && actions &&
+          !actions.querySelector("[data-role=download]")) {
+        const link = document.createElement("a");
+        link.href = "/audio/" + encodeURIComponent(job.audio_path);
+        link.className = "btn btn-primary btn-sm";
+        link.dataset.role = "download";
+        link.setAttribute("download", "");
+        link.textContent = "⬇ Download";
+        actions.appendChild(link);
+      }
+
+      const errorBox = card.querySelector("[data-role=error]");
+      if (errorBox) {
+        errorBox.textContent = job.error_msg || "";
+        errorBox.hidden = !job.error_msg;
+      }
+    },
+
+    // ── Deletion ──────────────────────────────────────────────────────────
+    dropCard(id) {
+      const card = document.getElementById("job-" + id);
+      if (card) card.remove();
+      this.selected = this.selected.filter((s) => s !== id);
+      this.total = Math.max(0, this.total - 1);
+    },
+    async deleteJob(id) {
+      if (!confirm("Delete this job and its audio file?")) return;
+      const resp = await fetch("/jobs/" + encodeURIComponent(id), { method: "DELETE" });
+      if (resp.ok || resp.status === 404) {
+        this.dropCard(id);
+        if (!this.cards().length) refreshJobsPage();
+      }
+    },
     async deleteSelected() {
-      if (this.selected.length === 0) return;
+      if (!this.selected.length) return;
       if (!confirm(`Delete ${this.selected.length} job(s) and their audio files?`)) return;
       const body = new URLSearchParams();
-      this.selected.forEach(id => body.append('job_ids', id));
-      await fetch('/jobs/bulk-delete', { method: 'POST', body });
+      this.selected.forEach((id) => body.append("job_ids", id));
+      const resp = await fetch("/jobs/bulk-delete", {
+        method: "POST",
+        body,
+        headers: { Accept: "application/json" },
+      });
+      if (!resp.ok) {
+        alert("Could not delete the selected jobs.");
+        return;
+      }
+      [...this.selected].forEach((id) => this.dropCard(id));
+      this.clearSelection();
+      // Off-page jobs may have been deleted too, so re-sync counts and paging.
       refreshJobsPage();
     },
   };
 }
-
-// Poll status without swapping the DOM; update badge in place and reload on terminal state.
-document.body.addEventListener("htmx:afterRequest", function(evt) {
-  const el = evt.detail.elt;
-  if (!el.id || !el.id.startsWith("job-")) return;
-  try {
-    const data = JSON.parse(evt.detail.xhr.responseText);
-    if (data.status === "completed" || data.status === "failed") {
-      refreshJobsPage();
-      return;
-    }
-    // Update badge text so the user sees live status without a full reload
-    const badge = el.querySelector(".badge");
-    if (badge) {
-      badge.textContent = data.status;
-      badge.className = "badge badge-" + data.status;
-    }
-  } catch (_) {}
-});
 </script>
 {% endblock %}

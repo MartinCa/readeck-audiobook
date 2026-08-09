@@ -1,30 +1,44 @@
 import os
 
 # Must be set before any app module is imported so module-level env reads pick
-# up the test values (e.g. app.readeck.READECK_BASE_URL).
+# up the test values (e.g. app.config.READECK_BASE_URL).
 os.environ.setdefault("READECK_BASE_URL", "http://readeck.test")
 os.environ.setdefault("READECK_API_TOKEN", "test-token")
 
 import httpx
+import pytest
 import pytest_asyncio
 
-from app import models
+from app import models, tts
+
+
+@pytest.fixture
+def audio_dir(tmp_path, monkeypatch):
+    """Isolated audio output directory."""
+    path = tmp_path / "audio"
+    path.mkdir()
+    monkeypatch.setattr(tts, "AUDIO_DIR", path)
+    return path
 
 
 @pytest_asyncio.fixture
 async def db(tmp_path, monkeypatch):
-    """Isolated in-memory-ish SQLite DB for each test."""
-    monkeypatch.setattr("app.models.DB_PATH", str(tmp_path / "test.db"))
+    """Isolated SQLite database for each test."""
+    monkeypatch.setattr(models, "DB_PATH", str(tmp_path / "test.db"))
     await models.init_db()
 
 
 @pytest_asyncio.fixture
-async def client(tmp_path, monkeypatch):
+async def client(tmp_path, monkeypatch, audio_dir):
     """Test HTTP client wired to the FastAPI app with an isolated DB."""
-    monkeypatch.setattr("app.models.DB_PATH", str(tmp_path / "test.db"))
-    # Prevent the background worker task from starting in tests.
+    monkeypatch.setattr(models, "DB_PATH", str(tmp_path / "test.db"))
+
+    # Prevent the background worker from starting in tests.
+    async def _noop_async(*args, **kwargs):
+        return None
+
     monkeypatch.setattr("app.jobs.start_worker", lambda: None)
-    monkeypatch.setattr("app.jobs.stop_worker", lambda: None)
+    monkeypatch.setattr("app.jobs.stop_worker", _noop_async)
 
     # ASGITransport does not run the ASGI lifespan, so initialise DB explicitly.
     await models.init_db()

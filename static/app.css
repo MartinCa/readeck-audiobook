@@ -17,6 +17,8 @@ nav a:hover, nav a.active { color: #f1f5f9; text-decoration: none; }
   background: #dcfce7; border: 1px solid #86efac; color: #166534;
   padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem;
 }
+.flash-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+[hidden] { display: none !important; }
 
 .card {
   background: #fff; border: 1px solid #e2e8f0; border-radius: 8px;
