@@ -6,14 +6,16 @@
 #   cp .env.example .env   # fill in READECK_BASE_URL / READECK_API_TOKEN
 #   docker compose -f docker-compose.kokoro.yml up -d
 #
-# Pin a specific released version instead of `latest-kokoro` via .env:
-#   READECK_AUDIOBOOK_IMAGE=ghcr.io/martinca/readeck-audiobook:1.2.0-kokoro
+# Pin a specific released version instead of `latest-kokoro-cuda` via .env:
+#   READECK_AUDIOBOOK_IMAGE=ghcr.io/martinca/readeck-audiobook:1.2.0-kokoro-cuda
 #
-# Uses the NVIDIA Container Toolkit for GPU acceleration (Kokoro falls back to CPU
-# automatically if no GPU is available — drop the `deploy` block below to force CPU-only).
+# Defaults to the CUDA image and requests GPU access via the NVIDIA Container
+# Toolkit. For a CPU-only host, switch to the `latest-kokoro` tag, set
+# KOKORO_PROVIDER=cpu and drop the `deploy` block below — the CUDA build of
+# sherpa-onnx cannot run without a GPU, so the tag has to change too.
 services:
   readeck-audiobook:
-    image: ${READECK_AUDIOBOOK_IMAGE:-ghcr.io/martinca/readeck-audiobook:latest-kokoro}
+    image: ${READECK_AUDIOBOOK_IMAGE:-ghcr.io/martinca/readeck-audiobook:latest-kokoro-cuda}
     ports:
       - "8080:8080"
     environment:
@@ -21,6 +23,8 @@ services:
       READECK_API_TOKEN: ${READECK_API_TOKEN}
       TTS_ENGINE: kokoro
       KOKORO_VOICE: ${KOKORO_VOICE:-af_heart}
+      KOKORO_PROVIDER: ${KOKORO_PROVIDER:-cuda}
+      KOKORO_NUM_THREADS: ${KOKORO_NUM_THREADS:-2}
       EDGE_TTS_VOICE: ${EDGE_TTS_VOICE:-en-US-AriaNeural}
       MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-2}
       # Unauthenticated unless both are set — see README.
@@ -30,7 +34,7 @@ services:
     volumes:
       - audio_data:/app/audio
       - db_data:/app/data
-      - kokoro_models:/app/models   # cache downloaded Kokoro model weights
+      # No model volume: the Kokoro model is baked into the image at build time.
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
@@ -50,4 +54,3 @@ services:
 volumes:
   audio_data:
   db_data:
-  kokoro_models:

@@ -62,6 +62,7 @@ readeck-audiobook/
 | `TTS_ENGINE` | No | `edge-tts` (default) or `kokoro` |
 | `EDGE_TTS_VOICE` | No | Voice name, e.g. `en-US-AriaNeural` (default) |
 | `KOKORO_VOICE` | No | Kokoro voice name (default `af_heart`), only used when `TTS_ENGINE=kokoro` |
+| `KOKORO_PROVIDER` | No | `cpu` (default) or `cuda`; needs the matching image variant |
 | `MAX_CONCURRENT_JOBS` | No | Max simultaneous TTS jobs (default: `2`) |
 | `PORT` | No | HTTP port (default: `8080`) |
 
@@ -128,18 +129,19 @@ CREATE TABLE jobs (
 - Language-to-voice mapping: `en→en-US-AriaNeural`, `de→de-DE-KatjaNeural`, `fr→fr-FR-DeniseNeural`, etc.
 
 ### kokoro (optional)
-- Local 82M-parameter neural model, run in-process (CUDA if available, else CPU)
+- Local 82M-parameter neural model, run in-process via sherpa-onnx (onnxruntime)
 - Input: plain text string, same as edge-tts — no separate ebook export needed
 - English only for now; other languages fall back to edge-tts automatically
-- Requires an image built from `Dockerfile.kokoro` (adds `kokoro`/`torch`/`soundfile`,
-  kept out of the default `requirements.txt` to keep the base image lightweight)
+- Requires an image built from `Dockerfile.kokoro` (adds `sherpa-onnx`/`soundfile`,
+  kept out of the default `requirements.txt` to keep the base image lightweight);
+  build with `--build-arg KOKORO_ACCEL=cuda` for the GPU variant
 
 ---
 
 ## Docker Setup
 
 ### Dockerfile (multi-stage, slim)
-- Base: `python:3.12-slim`
+- Base: `python:3.14-slim`
 - Install system deps: `ffmpeg` (for audio processing), `ca-certificates`
 - Copy `requirements.txt`, install Python deps
 - Copy app code

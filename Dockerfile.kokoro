@@ -1,28 +1,48 @@
 # Variant image that bundles the Kokoro-82M TTS model so TTS_ENGINE=kokoro can run
-# speech synthesis in-process (CUDA if available, else CPU) instead of edge-tts.
-# Pinned to 3.12 (not the 3.14 base of the default Dockerfile) for solid torch/kokoro support.
-FROM python:3.12-slim
+# speech synthesis in-process instead of edge-tts. Kokoro runs on sherpa-onnx
+# (onnxruntime), so this image shares the 3.14 base of the default Dockerfile.
+#
+# Build with --build-arg KOKORO_ACCEL=cuda for the GPU variant; see
+# requirements-kokoro-cuda.txt.
+FROM python:3.14-slim
 
+ARG KOKORO_ACCEL=cpu
+
+# The Kokoro model archive bundles its own espeak-ng-data, so unlike the
+# torch-based build this needs no espeak-ng package.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    espeak-ng \
     ca-certificates \
+    curl \
+    bzip2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY requirements.txt requirements-kokoro.txt .
+COPY requirements.txt requirements-kokoro.txt requirements-kokoro-cuda.txt .
 RUN pip install --no-cache-dir -r requirements-kokoro.txt && \
-    python -m spacy download en_core_web_sm
+    if [ "$KOKORO_ACCEL" = "cuda" ]; then \
+        pip install --no-cache-dir -r requirements-kokoro-cuda.txt; \
+    fi
+
+# The CUDA build of sherpa-onnx links against cuDNN/cuBLAS but ships neither,
+# so point the loader at the NVIDIA pip wheels installed above. Harmless on the
+# CPU build, where those directories simply don't exist.
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.14/site-packages/nvidia/cudnn/lib:/usr/local/lib/python3.14/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.14/site-packages/nvidia/cuda_runtime/lib
+
+# Bake the model in rather than downloading it on first use: startup becomes
+# deterministic and there is no writable-cache-volume ownership to get wrong.
+ARG KOKORO_MODEL=kokoro-multi-lang-v1_0
+RUN curl -fsSL -o /tmp/kokoro.tar.bz2 \
+      "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/${KOKORO_MODEL}.tar.bz2" && \
+    mkdir -p /app/models/kokoro && \
+    tar -xjf /tmp/kokoro.tar.bz2 -C /app/models/kokoro --strip-components=1 && \
+    rm /tmp/kokoro.tar.bz2
 
 COPY app/ ./app/
 COPY static/ ./static/
 
-# Kokoro's model weights are downloaded from the Hugging Face Hub on first use;
-# point the cache at a path that can be mounted as a volume to persist it.
-ENV HF_HOME=/app/models
-
-RUN mkdir -p /app/audio /app/data /app/models && \
+RUN mkdir -p /app/audio /app/data && \
     useradd -r -u 1001 appuser && \
     chown -R appuser:appuser /app
 

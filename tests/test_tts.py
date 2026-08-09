@@ -1,5 +1,10 @@
 """Tests for text preparation, filenames and engine dispatch in app.tts."""
 
+import subprocess
+import sys
+import types
+from pathlib import Path
+
 import pytest
 
 import app.tts as tts
@@ -44,6 +49,27 @@ class TestResolveEngineAndVoice:
         that actually ran rather than whatever TTS_ENGINE is set to."""
         monkeypatch.setattr(tts.config, "TTS_ENGINE", "kokoro")
         assert tts.resolve_engine_and_voice("da") == ("edge-tts", "da-DK-ChristelNeural")
+
+
+class TestResolveKokoroSid:
+    """sherpa-onnx picks a speaker by integer id, so KOKORO_VOICE names are mapped."""
+
+    def test_maps_known_voices(self):
+        assert tts.resolve_kokoro_sid("af_heart") == 3
+        assert tts.resolve_kokoro_sid("am_adam") == 11
+        assert tts.resolve_kokoro_sid("bf_alice") == 20
+
+    def test_default_voice_is_mappable(self):
+        """The shipped default must resolve, or every kokoro job fails."""
+        assert tts.resolve_kokoro_sid(tts.config.KOKORO_VOICE) == 3
+
+    def test_unknown_voice_raises_with_suggestions(self):
+        """A typo would otherwise synthesize a whole article in the wrong voice."""
+        with pytest.raises(ValueError, match="af_heart"):
+            tts.resolve_kokoro_sid("af_hearts")
+
+    def test_ids_are_unique(self):
+        assert len(set(tts.KOKORO_VOICES.values())) == len(tts.KOKORO_VOICES)
 
 
 class TestSlugify:
@@ -231,9 +257,96 @@ class TestSplitText:
         assert _split_text("   \n\n  ", 100) == []
 
 
+class TestSynthesizeKokoro:
+    """Covers the sherpa-onnx wiring. sherpa_onnx and soundfile only ship in the
+    kokoro image, so both are stubbed — this exercises the plumbing, not the model."""
+
+    @pytest.fixture
+    def fake_sherpa(self, monkeypatch):
+        seen = {}
+
+        class FakeAudio:
+            # Deliberately not 24000: the sample rate must come from the engine
+            # rather than the literal the torch-based implementation hardcoded.
+            samples = [0.0, 0.1, -0.1]
+            sample_rate = 22050
+
+        class FakeEngine:
+            num_speakers = len(tts.KOKORO_VOICES)
+
+            def generate(self, text, gen_config):
+                seen["text"] = text
+                seen["sid"] = gen_config.sid
+                seen["speed"] = gen_config.speed
+                return seen.get("audio", FakeAudio())
+
+        sherpa = types.ModuleType("sherpa_onnx")
+        sherpa.GenerationConfig = type("GenerationConfig", (), {})
+
+        def fake_write(path, samples, sample_rate):
+            seen["wav"] = (samples, sample_rate)
+            Path(path).write_bytes(b"wav")
+
+        soundfile = types.ModuleType("soundfile")
+        soundfile.write = fake_write
+
+        def fake_run(cmd, capture_output=False):
+            seen["ffmpeg"] = cmd
+            Path(cmd[-1]).write_bytes(b"mp3")
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        monkeypatch.setitem(sys.modules, "sherpa_onnx", sherpa)
+        monkeypatch.setitem(sys.modules, "soundfile", soundfile)
+        monkeypatch.setattr(tts, "_get_kokoro_tts", FakeEngine)
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        return seen
+
+    async def test_maps_the_voice_name_to_a_speaker_id(self, tmp_path, fake_sherpa):
+        await tts.synthesize_kokoro("Hello world", tmp_path / "out.mp3", "am_adam")
+        assert fake_sherpa["sid"] == 11
+        assert fake_sherpa["text"] == "Hello world"
+
+    async def test_uses_the_sample_rate_the_engine_reports(self, tmp_path, fake_sherpa):
+        out = tmp_path / "out.mp3"
+        await tts.synthesize_kokoro("Hello world", out, "af_heart")
+        assert fake_sherpa["wav"][1] == 22050
+        assert out.read_bytes() == b"mp3"
+
+    async def test_blank_voice_falls_back_to_config(self, tmp_path, fake_sherpa, monkeypatch):
+        monkeypatch.setattr(tts.config, "KOKORO_VOICE", "bf_emma")
+        await tts.synthesize_kokoro("Hi", tmp_path / "out.mp3", "")
+        assert fake_sherpa["sid"] == 21
+
+    async def test_unknown_voice_raises_before_loading_the_model(
+        self, tmp_path, fake_sherpa, monkeypatch
+    ):
+        def boom():
+            raise AssertionError("the model must not load for an invalid voice")
+
+        monkeypatch.setattr(tts, "_get_kokoro_tts", boom)
+        with pytest.raises(ValueError, match="Unknown Kokoro voice"):
+            await tts.synthesize_kokoro("Hi", tmp_path / "out.mp3", "af_hearts")
+
+    async def test_empty_audio_raises(self, tmp_path, fake_sherpa):
+        fake_sherpa["audio"] = type("Empty", (), {"samples": [], "sample_rate": 22050})()
+        with pytest.raises(RuntimeError, match="no audio"):
+            await tts.synthesize_kokoro("Hi", tmp_path / "out.mp3", "af_heart")
+
+    async def test_speaker_id_beyond_the_loaded_model_raises(
+        self, tmp_path, fake_sherpa, monkeypatch
+    ):
+        """Guards against the name→id table drifting from the bundled model:
+        an out-of-range id would otherwise read back as some other speaker."""
+        monkeypatch.setattr(
+            tts, "_get_kokoro_tts", lambda: type("Small", (), {"num_speakers": 11})()
+        )
+        with pytest.raises(RuntimeError, match="only has 11 speakers"):
+            await tts.synthesize_kokoro("Hi", tmp_path / "out.mp3", "bf_emma")
+
+
 class TestGenerateAudio:
     """Covers generate_audio's dispatch, naming and atomic write behaviour;
-    the real backends need edge_tts/kokoro installed, so they are faked."""
+    the real backends need edge_tts/sherpa_onnx installed, so they are faked."""
 
     @pytest.fixture
     def fake_backends(self, monkeypatch):
