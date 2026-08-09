@@ -504,6 +504,11 @@ async def synthesize_kokoro(text: str, output_path: Path, voice: str = ""):
                 "libmp3lame",
                 "-qscale:a",
                 "2",
+                # generate_audio synthesizes to a "<name>.mp3.part" sibling and
+                # renames it into place, and ffmpeg picks its muxer from the
+                # extension — ".part" means nothing to it. State the format.
+                "-f",
+                "mp3",
                 str(output_path),
             ]
             result = subprocess.run(ffmpeg_cmd, capture_output=True)

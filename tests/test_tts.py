@@ -339,6 +339,22 @@ class TestSynthesizeKokoro:
         assert len(fake_sherpa["writes"]) == len(fake_sherpa["generated"])
         assert fake_sherpa["closed"] is True
 
+    async def test_ffmpeg_is_told_the_format_for_the_part_file(self, audio_dir, fake_sherpa):
+        """generate_audio synthesizes to '<name>.mp3.part' and renames it into place.
+        ffmpeg picks its muxer from the extension and ".part" means nothing to it, so
+        without an explicit -f it refuses to open the output and the job dies after
+        doing all of the synthesis work."""
+        await tts.generate_audio(
+            "abcdef12-3456-7890-abcd-ef1234567890",
+            "Hello world",
+            title="An Article",
+            engine="kokoro",
+            voice="af_heart",
+        )
+        cmd = fake_sherpa["ffmpeg"]
+        assert cmd[-1].endswith(".mp3.part")
+        assert cmd[-3:-1] == ["-f", "mp3"]
+
     async def test_short_text_stays_a_single_call(self, tmp_path, fake_sherpa):
         await tts.synthesize_kokoro("Hello world", tmp_path / "out.mp3", "af_heart")
         assert len(fake_sherpa["generated"]) == 1
