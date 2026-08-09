@@ -2,9 +2,10 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -67,7 +68,7 @@ JOBS_PER_PAGE = 50
 
 
 @app.get("/jobs", response_class=HTMLResponse)
-async def jobs_page(request: Request, page: int = 1):
+async def jobs_page(request: Request, page: int = 1, flash: str = ""):
     offset = (page - 1) * JOBS_PER_PAGE
     job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE, offset=offset)
     total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
@@ -79,6 +80,7 @@ async def jobs_page(request: Request, page: int = 1):
             "current_page": page,
             "total_pages": total_pages,
             "total": total,
+            "flash": flash,
         },
     )
 
@@ -86,8 +88,8 @@ async def jobs_page(request: Request, page: int = 1):
 # ── Actions ────────────────────────────────────────────────────────────────────
 
 
-@app.post("/jobs", response_class=HTMLResponse)
-async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
+@app.post("/jobs")
+async def create_jobs(bookmark_ids: list[str] = Form(...)):
     created = []
     skipped = 0
     for bid in bookmark_ids:
@@ -112,22 +114,15 @@ async def create_jobs(request: Request, bookmark_ids: list[str] = Form(...)):
         )
         created.append(job)
 
-    job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE)
-    total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
     flash = f"Queued {len(created)} job(s)."
     if skipped:
         flash += f" Skipped {skipped} already queued or in progress."
-    return templates.TemplateResponse(
-        request,
-        "jobs.html",
-        {
-            "jobs": job_list,
-            "current_page": 1,
-            "total_pages": total_pages,
-            "total": total,
-            "flash": flash,
-        },
-    )
+    # Redirect (Post/Redirect/Get) rather than rendering the jobs page
+    # directly: if we rendered it here, the browser's current document
+    # would be POST-derived, and the jobs page's own periodic reload (used
+    # to refresh status) would then *resubmit that same POST* instead of
+    # doing a plain GET — silently re-queuing the same bookmarks forever.
+    return RedirectResponse(url=f"/jobs?flash={quote(flash)}", status_code=303)
 
 
 async def _delete_job_and_audio(job_id: str) -> dict | None:
@@ -149,26 +144,15 @@ async def delete_job(job_id: str):
     return HTMLResponse(content="")
 
 
-@app.post("/jobs/bulk-delete", response_class=HTMLResponse)
-async def bulk_delete_jobs(request: Request, job_ids: list[str] = Form(default=[])):
+@app.post("/jobs/bulk-delete")
+async def bulk_delete_jobs(job_ids: list[str] = Form(default=[])):
     deleted = 0
     for job_id in job_ids:
         if await _delete_job_and_audio(job_id):
             deleted += 1
 
-    job_list, total = await models.list_jobs(limit=JOBS_PER_PAGE)
-    total_pages = max(1, (total + JOBS_PER_PAGE - 1) // JOBS_PER_PAGE)
-    return templates.TemplateResponse(
-        request,
-        "jobs.html",
-        {
-            "jobs": job_list,
-            "current_page": 1,
-            "total_pages": total_pages,
-            "total": total,
-            "flash": f"Deleted {deleted} job(s).",
-        },
-    )
+    flash = quote(f"Deleted {deleted} job(s).")
+    return RedirectResponse(url=f"/jobs?flash={flash}", status_code=303)
 
 
 # ── API endpoints ──────────────────────────────────────────────────────────────

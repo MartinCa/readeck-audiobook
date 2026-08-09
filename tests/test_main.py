@@ -61,6 +61,22 @@ async def test_post_jobs_queues_and_returns_jobs_page(client, monkeypatch):
     assert b"My Article" in resp.content
 
 
+async def test_post_jobs_redirects_instead_of_rendering(client, monkeypatch):
+    """POST /jobs must redirect (Post/Redirect/Get), not render the jobs page
+    directly. Rendering it directly would leave the browser's current
+    document POST-derived, so the jobs page's own periodic refresh (used to
+    pick up job status changes) would resubmit that POST instead of doing a
+    plain GET — silently re-queuing the same bookmarks on every refresh.
+    """
+    monkeypatch.setattr(
+        "app.readeck.get_bookmark",
+        AsyncMock(return_value={"title": "My Article", "url": "http://example.com"}),
+    )
+    resp = await client.post("/jobs", data={"bookmark_ids": ["abc123"]}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/jobs?flash=")
+
+
 async def test_post_jobs_multiple_bookmarks(client, monkeypatch):
     monkeypatch.setattr(
         "app.readeck.get_bookmark",
@@ -156,6 +172,14 @@ async def test_bulk_delete_jobs(client):
     assert await models.get_job(job1["id"]) is None
     assert await models.get_job(job2["id"]) is None
     assert await models.get_job(job3["id"]) is not None
+
+
+async def test_bulk_delete_jobs_redirects_instead_of_rendering(client):
+    resp = await client.post(
+        "/jobs/bulk-delete", data={"job_ids": ["nope"]}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/jobs?flash=")
 
 
 async def test_bulk_delete_jobs_ignores_unknown_ids(client):
