@@ -80,20 +80,24 @@ Any unlisted language falls back to `EDGE_TTS_VOICE`.
 
 **Currently English only.** Kokoro only covers a handful of languages; when `TTS_ENGINE=kokoro`, bookmarks in any other language still fall back to edge-tts automatically (same as today).
 
-**Enable it:**
+CI publishes a dedicated `*-kokoro` image tag (e.g. `ghcr.io/martinca/readeck-audiobook:latest-kokoro`, or pinned like `:1.2.0-kokoro`) built from `Dockerfile.kokoro` — with `kokoro`/`torch`/`soundfile` installed, kept out of the default `requirements.txt` so the base image stays lightweight. Pull and run it directly, no local build needed:
 
 ```sh
-# In your .env
-TTS_ENGINE=kokoro
+cp .env.example .env   # fill in READECK_BASE_URL / READECK_API_TOKEN
+docker compose -f docker-compose.kokoro.yml up -d
 ```
+
+`docker-compose.kokoro.yml` is a standalone compose file (not layered on the default `docker-compose.yml`) that pulls `ghcr.io/martinca/readeck-audiobook:latest-kokoro` by default. Pin a specific version instead via `.env`:
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.kokoro.yml up -d --build
+READECK_AUDIOBOOK_IMAGE=ghcr.io/martinca/readeck-audiobook:1.2.0-kokoro
 ```
 
-This builds `Dockerfile.kokoro`, a variant image with `kokoro`/`torch`/`soundfile` installed (kept out of the default `requirements.txt` so the base image stays lightweight). It uses the NVIDIA Container Toolkit for GPU acceleration if available on the host; drop the `deploy.resources.reservations.devices` block in `docker-compose.kokoro.yml` to run CPU-only.
+It requests GPU access via `deploy.resources.reservations.devices` (NVIDIA Container Toolkit required on the host) — Kokoro uses CUDA automatically when available and falls back to CPU otherwise, so drop that block if you don't have a GPU.
 
 Model weights (a few hundred MB) download from the Hugging Face Hub on first use and are cached in the `kokoro_models` volume.
+
+To build the image yourself instead of pulling: `docker build -f Dockerfile.kokoro -t readeck-audiobook:kokoro .`
 
 ## Architecture
 
