@@ -4,11 +4,19 @@
 # Two differences from the CPU install:
 #   1. sherpa-onnx comes from the k2-fsa index as a +cuda12.cudnn9 build; the
 #      PyPI wheel has no CUDA execution provider compiled in.
-#   2. Unlike torch, that wheel does NOT bundle the CUDA runtime, so cuDNN and
-#      cuBLAS come from NVIDIA's pip wheels and Dockerfile.kokoro puts them on
-#      LD_LIBRARY_PATH.
+#   2. Unlike torch, that wheel does NOT bundle the CUDA runtime, so the libs
+#      below come from NVIDIA's pip wheels and Dockerfile.kokoro registers their
+#      directories with ldconfig.
+#
+# The library list mirrors what onnxruntime-gpu declares for its own CUDA EP
+# (cuda + cudnn extras), pinned to the cu12 flavour to match cuda12.cudnn9.
+# Missing any one of them fails at model-load time, not at import — see the
+# ldd check in Dockerfile.kokoro that verifies the closure at build time.
 --find-links https://k2-fsa.github.io/sherpa/onnx/cuda.html
 sherpa-onnx==1.13.4+cuda12.cudnn9
-nvidia-cuda-runtime-cu12
-nvidia-cudnn-cu12
-nvidia-cublas-cu12
+nvidia-cuda-runtime-cu12   # libcudart.so.12
+nvidia-cuda-nvrtc-cu12     # libnvrtc.so.12
+nvidia-cublas-cu12         # libcublas.so.12, libcublasLt.so.12
+nvidia-cufft-cu12          # libcufft.so.11
+nvidia-curand-cu12         # libcurand.so.10
+nvidia-cudnn-cu12          # libcudnn.so.9
