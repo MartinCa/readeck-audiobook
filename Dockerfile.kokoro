@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt requirements-kokoro.txt .
-RUN pip install --no-cache-dir -r requirements-kokoro.txt
+RUN pip install --no-cache-dir -r requirements-kokoro.txt && \
+    python -m spacy download en_core_web_sm
 
 COPY app/ ./app/
 COPY static/ ./static/
