@@ -46,6 +46,11 @@ KOKORO_MODEL_DIR = _env_path("KOKORO_MODEL_DIR", "/app/models/kokoro")
 # actually-loaded provider gets logged.
 KOKORO_PROVIDER = os.environ.get("KOKORO_PROVIDER", "cpu")
 KOKORO_NUM_THREADS = _env_int("KOKORO_NUM_THREADS", 2)
+# sherpa-onnx's verbose output, which names the execution providers that
+# actually registered — the only way to confirm CUDA is really in use. Off by
+# default because it also dumps the full text of every article being synthesized
+# to the log, twice (once as hex).
+KOKORO_DEBUG = os.environ.get("KOKORO_DEBUG", "").lower() in {"1", "true", "yes"}
 
 # Long articles are synthesised in pieces: edge-tts is a single WebSocket
 # session per call, and one multi-hour request is far more likely to fail than
