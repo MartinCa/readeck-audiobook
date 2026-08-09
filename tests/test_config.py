@@ -51,6 +51,13 @@ def test_integer_settings_are_clamped_to_a_sane_minimum(monkeypatch):
     assert cfg.MAX_CONCURRENT_JOBS == 1
 
 
+def test_the_kokoro_idle_unload_can_be_switched_off(monkeypatch):
+    """0 is a real setting here — keep the model (and its VRAM) resident — so it
+    must not be clamped up to 1 the way the other integer settings are."""
+    assert _reload(monkeypatch, KOKORO_IDLE_UNLOAD_SECONDS="0").KOKORO_IDLE_UNLOAD_SECONDS == 0
+    assert _reload(monkeypatch, KOKORO_IDLE_UNLOAD_SECONDS=None).KOKORO_IDLE_UNLOAD_SECONDS == 300
+
+
 def test_auth_is_off_unless_both_halves_are_set(monkeypatch):
     assert not _reload(monkeypatch, AUTH_USERNAME="alice", AUTH_PASSWORD=None).auth_enabled()
     assert not _reload(monkeypatch, AUTH_USERNAME=None, AUTH_PASSWORD="pw").auth_enabled()

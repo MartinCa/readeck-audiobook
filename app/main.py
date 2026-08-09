@@ -62,6 +62,10 @@ async def lifespan(app: FastAPI):
     finally:
         await jobs.stop_worker()
         await readeck.close_client()
+        # After the workers are done, so nothing is mid-synthesis. Tearing an
+        # onnxruntime CUDA session down at interpreter exit instead is a known
+        # way to hang or crash on the way out.
+        tts.release_kokoro()
 
 
 app = FastAPI(title="Readeck Audiobook", lifespan=lifespan)

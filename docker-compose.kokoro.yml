@@ -25,6 +25,9 @@ services:
       KOKORO_VOICE: ${KOKORO_VOICE:-af_heart}
       KOKORO_PROVIDER: ${KOKORO_PROVIDER:-cuda}
       KOKORO_NUM_THREADS: ${KOKORO_NUM_THREADS:-2}
+      # The loaded model holds its memory (a couple of GB of VRAM on CUDA) until
+      # it is dropped. 0 keeps it resident on a host dedicated to this app.
+      KOKORO_IDLE_UNLOAD_SECONDS: ${KOKORO_IDLE_UNLOAD_SECONDS:-300}
       # Set to 1 once to confirm CUDA registered, then unset — it also logs the
       # full text of every article.
       KOKORO_DEBUG: ${KOKORO_DEBUG:-}
