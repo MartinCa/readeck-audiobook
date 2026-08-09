@@ -25,10 +25,33 @@ RUN pip install --no-cache-dir -r requirements-kokoro.txt && \
         pip install --no-cache-dir -r requirements-kokoro-cuda.txt; \
     fi
 
-# The CUDA build of sherpa-onnx links against cuDNN/cuBLAS but ships neither,
-# so point the loader at the NVIDIA pip wheels installed above. Harmless on the
-# CPU build, where those directories simply don't exist.
-ENV LD_LIBRARY_PATH=/usr/local/lib/python3.14/site-packages/nvidia/cudnn/lib:/usr/local/lib/python3.14/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.14/site-packages/nvidia/cuda_runtime/lib
+# The CUDA build of sherpa-onnx links against the CUDA runtime libraries but
+# ships none of them, so register the NVIDIA pip wheels' lib directories with
+# the dynamic loader. Globbed rather than listed: every nvidia/*/lib directory
+# that gets installed is picked up, so adding a library to
+# requirements-kokoro-cuda.txt is all it takes to make it loadable.
+#
+# Then prove the closure is complete. onnxruntime loads the CUDA provider with
+# dlopen at model-load time, so a missing library surfaces as a failed job hours
+# later rather than a failed build — which is exactly how a missing libcurand
+# shipped once already. `ldd` resolves the same libraries without needing a GPU,
+# so this catches it on an ordinary CI runner.
+RUN if [ "$KOKORO_ACCEL" = "cuda" ]; then \
+        SHERPA=$(python -c "import importlib.util, pathlib; print(pathlib.Path(importlib.util.find_spec('sherpa_onnx').origin).parent)") && \
+        find "$(dirname "$SHERPA")/nvidia" -type d -name lib > /etc/ld.so.conf.d/nvidia-pip.conf && \
+        ldconfig && \
+        PROVIDER="$SHERPA/lib/libonnxruntime_providers_cuda.so" && \
+        if [ ! -f "$PROVIDER" ]; then \
+            echo "ERROR: $PROVIDER is absent — the CPU sherpa-onnx wheel got installed instead of the +cuda12.cudnn9 one" >&2; \
+            exit 1; \
+        fi && \
+        echo "Checking shared library closure of $PROVIDER" && \
+        ldd "$PROVIDER" && \
+        if ldd "$PROVIDER" | grep -q "not found"; then \
+            echo "ERROR: unresolved libraries above — add the matching nvidia-*-cu12 wheel to requirements-kokoro-cuda.txt" >&2; \
+            exit 1; \
+        fi; \
+    fi
 
 # Bake the model in rather than downloading it on first use: startup becomes
 # deterministic and there is no writable-cache-volume ownership to get wrong.
