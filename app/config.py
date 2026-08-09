@@ -37,6 +37,16 @@ TTS_ENGINE = os.environ.get("TTS_ENGINE", "edge-tts")
 EDGE_TTS_VOICE = os.environ.get("EDGE_TTS_VOICE", "en-US-AriaNeural")
 KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 
+# Kokoro runs through sherpa-onnx, which loads the model from a directory of
+# files (model.onnx, voices.bin, tokens.txt, espeak-ng-data/) rather than
+# downloading them itself. Dockerfile.kokoro extracts them here at build time.
+KOKORO_MODEL_DIR = _env_path("KOKORO_MODEL_DIR", "/app/models/kokoro")
+# "cpu" or "cuda". sherpa-onnx falls back to CPU silently when the CUDA
+# execution provider fails to register, so see the note in tts.py about how the
+# actually-loaded provider gets logged.
+KOKORO_PROVIDER = os.environ.get("KOKORO_PROVIDER", "cpu")
+KOKORO_NUM_THREADS = _env_int("KOKORO_NUM_THREADS", 2)
+
 # Long articles are synthesised in pieces: edge-tts is a single WebSocket
 # session per call, and one multi-hour request is far more likely to fail than
 # a sequence of short ones.

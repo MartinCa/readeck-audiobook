@@ -1,0 +1,14 @@
+# CUDA overlay for the Kokoro image, applied on top of requirements-kokoro.txt
+# when Dockerfile.kokoro is built with --build-arg KOKORO_ACCEL=cuda.
+#
+# Two differences from the CPU install:
+#   1. sherpa-onnx comes from the k2-fsa index as a +cuda12.cudnn9 build; the
+#      PyPI wheel has no CUDA execution provider compiled in.
+#   2. Unlike torch, that wheel does NOT bundle the CUDA runtime, so cuDNN and
+#      cuBLAS come from NVIDIA's pip wheels and Dockerfile.kokoro puts them on
+#      LD_LIBRARY_PATH.
+--find-links https://k2-fsa.github.io/sherpa/onnx/cuda.html
+sherpa-onnx==1.13.4+cuda12.cudnn9
+nvidia-cuda-runtime-cu12
+nvidia-cudnn-cu12
+nvidia-cublas-cu12

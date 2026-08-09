@@ -22,6 +22,11 @@ jobs:
           - variant: kokoro
             dockerfile: Dockerfile.kokoro
             suffix: "-kokoro"
+            build-args: KOKORO_ACCEL=cpu
+          - variant: kokoro-cuda
+            dockerfile: Dockerfile.kokoro
+            suffix: "-kokoro-cuda"
+            build-args: KOKORO_ACCEL=cuda
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -54,6 +59,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.build-args }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -5,6 +5,7 @@ import html
 import logging
 import os
 import re
+import threading
 import unicodedata
 from pathlib import Path
 
@@ -33,8 +34,33 @@ LANG_VOICE_MAP = {
 DEFAULT_VOICE = config.EDGE_TTS_VOICE
 # Kokoro-82M only covers a handful of languages; everything else still goes
 # through edge-tts even when TTS_ENGINE=kokoro. English only for now.
-KOKORO_LANG_CODE = "a"  # American English
 KOKORO_SUPPORTED_LANGS = {"en"}
+
+# sherpa-onnx picks a Kokoro speaker by integer id, not by name. Keeping the
+# familiar names in KOKORO_VOICE means mapping them here — this is the published
+# id→name table for the kokoro-multi-lang-v1_0 model that Dockerfile.kokoro
+# bundles. Changing the bundled model means changing this table.
+KOKORO_VOICES = {
+    "af_alloy": 0, "af_aoede": 1, "af_bella": 2, "af_heart": 3,
+    "af_jessica": 4, "af_kore": 5, "af_nicole": 6, "af_nova": 7,
+    "af_river": 8, "af_sarah": 9, "af_sky": 10, "am_adam": 11,
+    "am_echo": 12, "am_eric": 13, "am_fenrir": 14, "am_liam": 15,
+    "am_michael": 16, "am_onyx": 17, "am_puck": 18, "am_santa": 19,
+    "bf_alice": 20, "bf_emma": 21, "bf_isabella": 22, "bf_lily": 23,
+    "bm_daniel": 24, "bm_fable": 25, "bm_george": 26, "bm_lewis": 27,
+    "ef_dora": 28, "em_alex": 29, "ff_siwis": 30, "hf_alpha": 31,
+    "hf_beta": 32, "hm_omega": 33, "hm_psi": 34, "if_sara": 35,
+    "im_nicola": 36, "jf_alpha": 37, "jf_gongitsune": 38, "jf_nezumi": 39,
+    "jf_tebukuro": 40, "jm_kumo": 41, "pf_dora": 42, "pm_alex": 43,
+    "pm_santa": 44, "zf_xiaobei": 45, "zf_xiaoni": 46, "zf_xiaoxiao": 47,
+    "zf_xiaoyi": 48, "zm_yunjian": 49, "zm_yunxi": 50, "zm_yunxia": 51,
+    "zm_yunyang": 52,
+}  # fmt: skip
+
+# Also model-specific. The archive ships a gb-en lexicon alongside these, but
+# sherpa-onnx's own documented invocation leaves it out — loading both would let
+# British pronunciations win for the American voices we default to.
+KOKORO_LEXICONS = ("lexicon-us-en.txt", "lexicon-zh.txt")
 
 ENGINE_EDGE = "edge-tts"
 ENGINE_KOKORO = "kokoro"
@@ -58,6 +84,22 @@ def resolve_engine_and_voice(lang: str) -> tuple[str, str]:
     if config.TTS_ENGINE == ENGINE_KOKORO and base in KOKORO_SUPPORTED_LANGS:
         return ENGINE_KOKORO, config.KOKORO_VOICE
     return ENGINE_EDGE, _pick_voice(lang)
+
+
+def resolve_kokoro_sid(voice: str) -> int:
+    """Map a Kokoro voice name to the speaker id sherpa-onnx expects.
+
+    A typo would otherwise synthesize a whole article in the wrong voice (or in
+    the wrong language — the ids run across all of the model's locales), so an
+    unknown name fails the job instead.
+    """
+    try:
+        return KOKORO_VOICES[voice]
+    except KeyError:
+        english = sorted(v for v in KOKORO_VOICES if v[0] in "ab")
+        raise ValueError(
+            f"Unknown Kokoro voice {voice!r}. English voices: {', '.join(english)}"
+        ) from None
 
 
 # ── Filenames ──────────────────────────────────────────────────────────────────
@@ -323,54 +365,106 @@ async def synthesize_edge_tts(text: str, output_path: Path, voice: str):
             fh.write(await _with_retries(synthesize, f"edge-tts chunk {index}/{len(chunks)}"))
 
 
-_kokoro_pipeline = None
+_kokoro_tts = None
+# One cached engine is shared by every worker thread, and MAX_CONCURRENT_JOBS
+# defaults to 2. sherpa-onnx makes no thread-safety promise about OfflineTts, so
+# serialize synthesis rather than find out the hard way.
+_kokoro_lock = threading.Lock()
 
 
-def _get_kokoro_pipeline():
-    """Lazily construct and cache the Kokoro pipeline (loads the model once per process)."""
-    global _kokoro_pipeline
-    if _kokoro_pipeline is None:
-        import torch
-        from kokoro import KPipeline
+def _kokoro_model_file(name: str) -> str:
+    path = config.KOKORO_MODEL_DIR / name
+    if not path.exists():
+        raise RuntimeError(
+            f"Kokoro model file {path} is missing. KOKORO_MODEL_DIR should point at an "
+            "extracted sherpa-onnx Kokoro model directory."
+        )
+    return str(path)
 
-        _kokoro_pipeline = KPipeline(lang_code=KOKORO_LANG_CODE)
-        device = _kokoro_pipeline.model.device
-        if device.type == "cuda":
-            logger.info(
-                "Kokoro model loaded on CUDA device %s (%s)",
-                device.index or 0,
-                torch.cuda.get_device_name(device),
+
+def _get_kokoro_tts():
+    """Lazily construct and cache the sherpa-onnx Kokoro engine (loads the model once)."""
+    global _kokoro_tts
+    if _kokoro_tts is None:
+        import sherpa_onnx
+
+        provider = config.KOKORO_PROVIDER
+        model_config = sherpa_onnx.OfflineTtsModelConfig(
+            kokoro=sherpa_onnx.OfflineTtsKokoroModelConfig(
+                model=_kokoro_model_file("model.onnx"),
+                voices=_kokoro_model_file("voices.bin"),
+                tokens=_kokoro_model_file("tokens.txt"),
+                data_dir=_kokoro_model_file("espeak-ng-data"),
+                lexicon=",".join(
+                    str(config.KOKORO_MODEL_DIR / name)
+                    for name in KOKORO_LEXICONS
+                    if (config.KOKORO_MODEL_DIR / name).exists()
+                ),
+            ),
+            provider=provider,
+            num_threads=config.KOKORO_NUM_THREADS,
+            # sherpa-onnx has no equivalent of torch.cuda.is_available(): when the
+            # CUDA execution provider fails to register it falls back to CPU
+            # without complaint. Its debug output naming the providers that did
+            # register is the only reliable signal, so enable it for CUDA.
+            debug=provider == "cuda",
+        )
+        # No max_num_sentences here: sherpa-onnx ignores it for Kokoro models and
+        # logs a warning for any value but the default. Kokoro does its own
+        # sentence splitting internally, so long articles go in as one string.
+        _kokoro_tts = sherpa_onnx.OfflineTts(sherpa_onnx.OfflineTtsConfig(model=model_config))
+        logger.info(
+            "Kokoro model loaded from %s: %s speakers (requested provider: %s, threads: %s)",
+            config.KOKORO_MODEL_DIR,
+            _kokoro_tts.num_speakers,
+            provider,
+            config.KOKORO_NUM_THREADS,
+        )
+        if _kokoro_tts.num_speakers != len(KOKORO_VOICES):
+            logger.warning(
+                "KOKORO_VOICES maps %s names but the loaded model has %s speakers — the "
+                "name→id table is specific to kokoro-multi-lang-v1_0. Voices may be wrong.",
+                len(KOKORO_VOICES),
+                _kokoro_tts.num_speakers,
             )
-        else:
+        if provider == "cuda":
             logger.info(
-                "Kokoro model loaded on %s (CUDA available: %s)",
-                device,
-                torch.cuda.is_available(),
+                "CUDA requested — check the sherpa-onnx debug output above for the "
+                "execution providers that actually registered; it falls back to CPU silently."
             )
-    return _kokoro_pipeline
+    return _kokoro_tts
 
 
 async def synthesize_kokoro(text: str, output_path: Path, voice: str = ""):
-    """Synthesize speech with the local Kokoro-82M model (CUDA if available, else CPU)."""
+    """Synthesize speech with the local Kokoro-82M model via sherpa-onnx."""
     import subprocess
     import tempfile
 
-    import numpy as np
+    import sherpa_onnx
     import soundfile as sf
 
     voice = voice or config.KOKORO_VOICE
+    sid = resolve_kokoro_sid(voice)
 
     def _run_sync():
-        pipeline = _get_kokoro_pipeline()
-        chunks = [audio for _, _, audio in pipeline(text, voice=voice)]
-        if not chunks:
+        engine = _get_kokoro_tts()
+        if sid >= engine.num_speakers:
+            raise RuntimeError(
+                f"Kokoro voice {voice!r} maps to speaker id {sid}, but the loaded "
+                f"model only has {engine.num_speakers} speakers."
+            )
+        gen_config = sherpa_onnx.GenerationConfig()
+        gen_config.sid = sid
+        gen_config.speed = 1.0
+        with _kokoro_lock:
+            audio = engine.generate(text, gen_config)
+        if audio.sample_rate <= 0 or len(audio.samples) == 0:
             raise RuntimeError("Kokoro produced no audio")
-        audio = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             wav_path = Path(tmp.name)
         try:
-            sf.write(str(wav_path), audio, 24000)
+            sf.write(str(wav_path), audio.samples, audio.sample_rate)
             ffmpeg_cmd = [
                 "ffmpeg",
                 "-y",

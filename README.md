@@ -107,34 +107,44 @@ The suffix keeps two articles with the same title apart and ties the file back t
 
 ## Kokoro (optional, higher quality)
 
-[Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) is a small (82M parameter) open-weight neural TTS model that runs directly in-process — no separate service, no multi-GB download, no subprocess orchestration. Quality is noticeably better than edge-tts, and it runs fine on CPU (near-instant on a GPU if one's available — it uses CUDA automatically when present).
+[Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) is a small (82M parameter) open-weight neural TTS model that runs directly in-process — no separate service, no subprocess orchestration. Quality is noticeably better than edge-tts, and it runs fine on CPU.
+
+It runs on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (onnxruntime), not PyTorch. That keeps the variant image close in size to the default one: no torch, no transformers, no spaCy, and no espeak-ng system package — the model archive bundles its own `espeak-ng-data`.
 
 **Currently English only.** Kokoro only covers a handful of languages; when `TTS_ENGINE=kokoro`, bookmarks in any other language still fall back to edge-tts automatically (same as today).
 
-CI publishes a dedicated `*-kokoro` image tag (e.g. `ghcr.io/martinca/readeck-audiobook:latest-kokoro`, or pinned like `:1.2.0-kokoro`) built from `Dockerfile.kokoro` — with `kokoro`/`torch`/`soundfile` installed, kept out of the default `requirements.txt` so the base image stays lightweight. Pull and run it directly, no local build needed:
+CI publishes two image tags built from `Dockerfile.kokoro`:
+
+| Tag | Build arg | For |
+| --- | --- | --- |
+| `latest-kokoro` | `KOKORO_ACCEL=cpu` | CPU-only hosts |
+| `latest-kokoro-cuda` | `KOKORO_ACCEL=cuda` | NVIDIA GPU hosts |
+
+Both bake the model in at build time, so there is nothing to download on first run. Pull and run directly, no local build needed:
 
 ```sh
 cp .env.example .env   # fill in READECK_BASE_URL / READECK_API_TOKEN
 docker compose -f docker-compose.kokoro.yml up -d
 ```
 
-`docker-compose.kokoro.yml` is a standalone compose file (not layered on the default `docker-compose.yml`) that pulls `ghcr.io/martinca/readeck-audiobook:latest-kokoro` by default. Pin a specific version instead via `.env`:
+`docker-compose.kokoro.yml` is a standalone compose file (not layered on the default `docker-compose.yml`) that pulls `ghcr.io/martinca/readeck-audiobook:latest-kokoro-cuda` by default and requests GPU access via `deploy.resources.reservations.devices` (NVIDIA Container Toolkit required on the host). Pin a specific version instead via `.env`:
 
 ```sh
-READECK_AUDIOBOOK_IMAGE=ghcr.io/martinca/readeck-audiobook:1.2.0-kokoro
+READECK_AUDIOBOOK_IMAGE=ghcr.io/martinca/readeck-audiobook:1.2.0-kokoro-cuda
 ```
 
-It requests GPU access via `deploy.resources.reservations.devices` (NVIDIA Container Toolkit required on the host) — Kokoro uses CUDA automatically when available and falls back to CPU otherwise, so drop that block if you don't have a GPU.
+**On a host without a GPU**, switch to the CPU tag and set `KOKORO_PROVIDER=cpu`, then drop the `deploy` block. Unlike the old torch build, the CUDA image cannot fall back to CPU — the execution provider is compiled into the wheel, so the tag has to change too.
 
-Model weights (a few hundred MB) download from the Hugging Face Hub on first use and are cached in the `kokoro_models` volume.
-
-To build the image yourself instead of pulling: `docker build -f Dockerfile.kokoro -t readeck-audiobook:kokoro .`
-
-**`[Errno 13] Permission denied: '/app/models/hub'`**: the container runs as an unprivileged `appuser` (uid 1001). If `kokoro_models` is a pre-existing volume that was first populated by an older image (or by a container running as root), it can retain root ownership, which blocks writes from `appuser`. Fix it once with:
+To build the images yourself instead of pulling:
 
 ```sh
-docker run --rm -v kokoro_models:/data alpine chown -R 1001:1001 /data
+docker build -f Dockerfile.kokoro -t readeck-audiobook:kokoro .
+docker build -f Dockerfile.kokoro --build-arg KOKORO_ACCEL=cuda -t readeck-audiobook:kokoro-cuda .
 ```
+
+**Verifying the GPU is actually in use.** sherpa-onnx falls back to CPU silently when the CUDA execution provider fails to register — there is no `torch.cuda.is_available()` equivalent to log. The image therefore turns on sherpa-onnx's own debug output whenever `KOKORO_PROVIDER=cuda`; check the container logs on the first synthesis for the list of providers that registered.
+
+**Voices.** `KOKORO_VOICE` still takes names (`af_heart`, `am_michael`, `bf_emma`, …). sherpa-onnx selects speakers by integer id internally, and `app/tts.py` holds the name→id table for the bundled `kokoro-multi-lang-v1_0` model. An unrecognised name fails the job with the list of valid English voices rather than quietly synthesising in another voice.
 
 ## Architecture
 
@@ -162,7 +172,7 @@ readeck-audiobook/
 
 **Stack:** Python 3.12+ · FastAPI · Jinja2 · Alpine.js · SQLite · edge-tts
 
-The default image builds on Python 3.14; `Dockerfile.kokoro` pins 3.12 for torch compatibility. CI runs the suite on both.
+Both images build on Python 3.14. CI runs the suite on 3.12 (the declared minimum) and 3.14.
 
 **How a job flows:**
 

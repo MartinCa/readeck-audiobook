@@ -1,6 +1,7 @@
 # Extra dependencies for TTS_ENGINE=kokoro (see Dockerfile.kokoro).
-# Pulls in torch as a transitive dependency of kokoro — kept out of the
-# default requirements.txt so the base image stays lightweight.
+# sherpa-onnx runs Kokoro-82M on onnxruntime — one self-contained wheel with no
+# torch, transformers or spaCy behind it. Kept out of the default
+# requirements.txt anyway so the base image carries no TTS model machinery.
 -r requirements.txt
-kokoro>=0.9.4
-soundfile
+sherpa-onnx==1.13.4
+soundfile==0.14.0

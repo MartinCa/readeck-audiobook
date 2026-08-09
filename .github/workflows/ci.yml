@@ -14,8 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.12 is the declared minimum (and what Dockerfile.kokoro runs);
-        # 3.14 is what the default image ships.
+        # 3.12 is the declared minimum; 3.14 is what both images ship.
         python-version: ["3.12", "3.14"]
 
     steps:
