@@ -1,7 +1,7 @@
 # Variant image that bundles the Kokoro-82M TTS model so TTS_ENGINE=kokoro can run
 # speech synthesis in-process (CUDA if available, else CPU) instead of edge-tts.
 # Pinned to 3.12 (not the 3.14 base of the default Dockerfile) for solid torch/kokoro support.
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
