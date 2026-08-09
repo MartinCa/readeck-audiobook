@@ -27,7 +27,8 @@ LANG_VOICE_MAP = {
 
 DEFAULT_VOICE = os.environ.get("EDGE_TTS_VOICE", "en-US-AriaNeural")
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "edge-tts")
-EBOOK2AUDIOBOOK_URL = os.environ.get("EBOOK2AUDIOBOOK_URL", "")
+EBOOK2AUDIOBOOK_CMD = os.environ.get("EBOOK2AUDIOBOOK_CMD", "/app/ebook2audiobook.command")
+EBOOK2AUDIOBOOK_TIMEOUT = int(os.environ.get("EBOOK2AUDIOBOOK_TIMEOUT_SECONDS", "7200"))
 
 
 def _pick_voice(lang: str) -> str:
@@ -64,57 +65,80 @@ async def synthesize_edge_tts(text: str, output_path: Path, voice: str):
     await communicate.save(str(output_path))
 
 
-async def synthesize_ebook2audiobook(epub_bytes: bytes, output_path: Path, lang: str = "en"):
-    """Call the ebook2audiobook Gradio service via gradio_client.
+def _find_output_file(output_dir: Path) -> Path:
+    """Locate the single audio file ebook2audiobook produced under output_dir."""
+    candidates = [p for p in output_dir.rglob("*") if p.is_file()]
+    if not candidates:
+        raise RuntimeError(f"ebook2audiobook produced no output file in {output_dir}")
+    if len(candidates) > 1:
+        names = ", ".join(p.name for p in candidates)
+        raise RuntimeError(f"ebook2audiobook produced multiple output files: {names}")
+    return candidates[0]
 
-    The Gradio app exposes a REST-like API that gradio_client wraps.
-    The client handles uploading the EPUB and downloading the result.
+
+async def synthesize_ebook2audiobook(epub_bytes: bytes, output_path: Path, lang: str = "en"):
+    """Convert an EPUB via ebook2audiobook's headless CLI, run as a local subprocess.
+
+    ebook2audiobook's Gradio UI does not expose a stable HTTP API for conversion —
+    the only supported non-interactive path is `--headless` mode. This assumes the
+    ebook2audiobook runtime is bundled into this image (see Dockerfile.ebook2audiobook)
+    so the CLI is available locally at EBOOK2AUDIOBOOK_CMD.
     """
     import asyncio
     import shutil
     import tempfile
 
-    if not EBOOK2AUDIOBOOK_URL:
-        raise RuntimeError("EBOOK2AUDIOBOOK_URL is not set — add it to your .env")
+    if not Path(EBOOK2AUDIOBOOK_CMD).exists():
+        raise RuntimeError(
+            f"{EBOOK2AUDIOBOOK_CMD} not found — TTS_ENGINE=ebook2audiobook requires an image "
+            "built from Dockerfile.ebook2audiobook, which bundles the ebook2audiobook runtime."
+        )
 
-    def _run_sync():
-        from gradio_client import Client, handle_file
+    tmp_dir = Path(tempfile.mkdtemp(prefix="e2a-job-"))
+    try:
+        input_path = tmp_dir / "input.epub"
+        input_path.write_bytes(epub_bytes)
+        output_dir = tmp_dir / "output"
+        output_dir.mkdir()
 
-        # Write the EPUB bytes to a temp file so gradio_client can upload it
-        with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tmp:
-            tmp.write(epub_bytes)
-            epub_path = tmp.name
+        base_lang = (lang or "en").split("-")[0].lower()
+        cmd = [
+            EBOOK2AUDIOBOOK_CMD,
+            "--headless",
+            "--ebook",
+            str(input_path),
+            "--language",
+            base_lang,
+            "--output_format",
+            "mp3",
+            "--output_dir",
+            str(output_dir),
+        ]
 
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
         try:
-            client = Client(EBOOK2AUDIOBOOK_URL)
-            # ebook2audiobook's Gradio interface: first positional arg is the ebook file.
-            # Additional args (voice, language, custom_model, …) all have defaults so
-            # we only pass the ebook and the language.
-            result = client.predict(
-                ebook_file_input=handle_file(epub_path),
-                target_voice_file=None,
-                language=lang or "en",
-                use_custom_model=False,
-                custom_model_file=None,
-                custom_config_file=None,
-                custom_vocab_file=None,
-                custom_model_url="",
-                temperature=0.65,
-                length_penalty=1.0,
-                repetition_penalty=2.5,
-                top_k=50,
-                top_p=0.8,
-                speed=1.0,
-                enable_text_splitting=True,
-                api_name="/convert_ebook",
-            )
-            # result is a tuple; the audio file path is the first element
-            audio_result = result[0] if isinstance(result, (list, tuple)) else result
-            shutil.copy(str(audio_result), str(output_path))
-        finally:
-            Path(epub_path).unlink(missing_ok=True)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=EBOOK2AUDIOBOOK_TIMEOUT)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(
+                f"ebook2audiobook conversion timed out after {EBOOK2AUDIOBOOK_TIMEOUT}s"
+            ) from None
 
-    await asyncio.to_thread(_run_sync)
+        output = stdout.decode(errors="replace")
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"ebook2audiobook exited with code {proc.returncode}: {output[-4000:]}"
+            )
+
+        result_file = _find_output_file(output_dir)
+        shutil.copy(str(result_file), str(output_path))
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 async def generate_audio(

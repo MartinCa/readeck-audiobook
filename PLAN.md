@@ -56,7 +56,7 @@ readeck-audiobook/
 | `READECK_API_TOKEN` | Yes | Readeck Bearer API token |
 | `TTS_ENGINE` | No | `edge-tts` (default) or `ebook2audiobook` |
 | `EDGE_TTS_VOICE` | No | Voice name, e.g. `en-US-AriaNeural` (default) |
-| `EBOOK2AUDIOBOOK_URL` | No | URL of ebook2audiobook API when `TTS_ENGINE=ebook2audiobook` |
+| `EBOOK2AUDIOBOOK_TIMEOUT_SECONDS` | No | Max conversion time when `TTS_ENGINE=ebook2audiobook` (default `7200`) |
 | `MAX_CONCURRENT_JOBS` | No | Max simultaneous TTS jobs (default: `2`) |
 | `PORT` | No | HTTP port (default: `8080`) |
 
@@ -123,9 +123,10 @@ CREATE TABLE jobs (
 - Language-to-voice mapping: `en→en-US-AriaNeural`, `de→de-DE-KatjaNeural`, `fr→fr-FR-DeniseNeural`, etc.
 
 ### ebook2audiobook (optional)
-- Sends the EPUB export (`GET /api/bookmarks/{id}/article.epub`) to the ebook2audiobook HTTP API
-- Polls for completion, downloads resulting audio
-- Requires `EBOOK2AUDIOBOOK_URL` env var pointing to a running ebook2audiobook container
+- Fetches the EPUB export (`GET /api/bookmarks/{id}/article.epub`)
+- ebook2audiobook exposes no stable HTTP API for conversion, so the app runs its `--headless`
+  CLI as a local subprocess instead, on an image built from `Dockerfile.ebook2audiobook`
+  (bundles the ebook2audiobook runtime on top of this app's image)
 
 ---
 

@@ -50,7 +50,7 @@ All settings are passed as environment variables (or via `.env`).
 | `READECK_API_TOKEN` | Yes | — | Readeck Bearer API token |
 | `TTS_ENGINE` | No | `edge-tts` | `edge-tts` or `ebook2audiobook` |
 | `EDGE_TTS_VOICE` | No | `en-US-AriaNeural` | Default voice when language cannot be detected |
-| `EBOOK2AUDIOBOOK_URL` | No | `http://ebook2audiobook:7860` | URL of the ebook2audiobook service |
+| `EBOOK2AUDIOBOOK_TIMEOUT_SECONDS` | No | `7200` | Max time to wait for an ebook2audiobook conversion before failing the job |
 | `MAX_CONCURRENT_JOBS` | No | `2` | Maximum simultaneous TTS jobs |
 
 ### Language-to-voice mapping (edge-tts)
@@ -76,7 +76,9 @@ Any unlisted language falls back to `EDGE_TTS_VOICE`.
 
 ## ebook2audiobook (optional)
 
-[ebook2audiobook](https://github.com/DrewThomasson/ebook2audiobook) produces higher-quality audio using large neural TTS models and supports voice cloning. It is significantly heavier (multi-GB model downloads on first run) and runs as a separate Docker service.
+[ebook2audiobook](https://github.com/DrewThomasson/ebook2audiobook) produces higher-quality audio using large neural TTS models and supports voice cloning. It is significantly heavier (multi-GB model downloads on first run).
+
+Its Gradio UI does not expose a stable HTTP API for conversion — the only supported non-interactive path is its `--headless` CLI mode. Because of that, `TTS_ENGINE=ebook2audiobook` does **not** talk to a separate service over the network: instead, `Dockerfile.ebook2audiobook` builds a variant of this image on top of `athomasson2/ebook2audiobook`, and the app shells out to the bundled headless CLI locally for each conversion job.
 
 **Enable it:**
 
@@ -86,22 +88,25 @@ TTS_ENGINE=ebook2audiobook
 ```
 
 ```sh
-docker compose --profile ebook2audiobook up -d
+docker compose -f docker-compose.yml -f docker-compose.ebook2audiobook.yml up -d --build
 ```
 
-The `readeck-audiobook` service will wait for `ebook2audiobook` to pass its health check before starting (model downloads can take a few minutes on the first run).
+The default base image is the CUDA build (`athomasson2/ebook2audiobook:v26.7.27-cu130`), which requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. For CPU or ROCm hosts, build with a different base image and drop the `deploy.resources.reservations.devices` GPU block from `docker-compose.ebook2audiobook.yml`:
 
-The Gradio web UI for ebook2audiobook is available at [http://localhost:7860](http://localhost:7860) for direct use.
-
-**GPU acceleration** — swap the image tag in `docker-compose.yml`:
+```sh
+docker compose -f docker-compose.yml -f docker-compose.ebook2audiobook.yml build \
+  --build-arg E2A_BASE_IMAGE=docker.io/athomasson2/ebook2audiobook:cpu
+```
 
 | Hardware | Tag |
 |---|---|
-| CPU only (default) | `athomasson2/ebook2audiobook:cpu` |
-| NVIDIA CUDA 12.8 | `athomasson2/ebook2audiobook:cu128` |
+| NVIDIA CUDA (default) | `athomasson2/ebook2audiobook:v26.7.27-cu130` |
+| CPU only | `athomasson2/ebook2audiobook:cpu` |
 | AMD ROCm 6.4 | `athomasson2/ebook2audiobook:rocm6.4` |
 
-For CUDA, also add `deploy.resources.reservations.devices` with `driver: nvidia` to the `ebook2audiobook` service.
+**Notes:**
+- This image variant runs as root, unlike the default `Dockerfile` — the bundled ebook2audiobook runtime itself runs as root, and recursively `chown`-ing multi-GB model-cache volumes on every start isn't practical.
+- Each conversion spawns its own `ebook2audiobook` process with its own model load — there's no shared server-side queue anymore. Keep `MAX_CONCURRENT_JOBS=1` unless the host has enough RAM/VRAM headroom for multiple concurrent model loads.
 
 ## Architecture
 
