@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -257,61 +258,62 @@ class TestSplitText:
         assert _split_text("   \n\n  ", 100) == []
 
 
+@pytest.fixture
+def fake_sherpa(monkeypatch):
+    seen = {}
+
+    class FakeAudio:
+        # Deliberately not 24000: the sample rate must come from the engine
+        # rather than the literal the torch-based implementation hardcoded.
+        samples = [0.0, 0.1, -0.1]
+        sample_rate = 22050
+
+    class FakeEngine:
+        num_speakers = len(tts.KOKORO_VOICES)
+
+        def generate(self, text, gen_config):
+            seen["text"] = text
+            seen["sid"] = gen_config.sid
+            seen["speed"] = gen_config.speed
+            seen.setdefault("generated", []).append(text)
+            return seen.get("audio", FakeAudio())
+
+    sherpa = types.ModuleType("sherpa_onnx")
+    sherpa.GenerationConfig = type("GenerationConfig", (), {})
+
+    class FakeSoundFile:
+        """Stands in for the streaming writer the real code appends to."""
+
+        def __init__(self, path, mode, samplerate, channels, subtype):
+            seen["wav"] = (samplerate, channels, subtype)
+            seen["writes"] = []
+            self._path = Path(path)
+            self._path.write_bytes(b"wav")
+
+        def write(self, samples):
+            seen["writes"].append(samples)
+
+        def close(self):
+            seen["closed"] = True
+
+    soundfile = types.ModuleType("soundfile")
+    soundfile.SoundFile = FakeSoundFile
+
+    def fake_run(cmd, capture_output=False):
+        seen["ffmpeg"] = cmd
+        Path(cmd[-1]).write_bytes(b"mp3")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", sherpa)
+    monkeypatch.setitem(sys.modules, "soundfile", soundfile)
+    monkeypatch.setattr(tts, "_get_kokoro_tts", FakeEngine)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return seen
+
+
 class TestSynthesizeKokoro:
     """Covers the sherpa-onnx wiring. sherpa_onnx and soundfile only ship in the
     kokoro image, so both are stubbed — this exercises the plumbing, not the model."""
-
-    @pytest.fixture
-    def fake_sherpa(self, monkeypatch):
-        seen = {}
-
-        class FakeAudio:
-            # Deliberately not 24000: the sample rate must come from the engine
-            # rather than the literal the torch-based implementation hardcoded.
-            samples = [0.0, 0.1, -0.1]
-            sample_rate = 22050
-
-        class FakeEngine:
-            num_speakers = len(tts.KOKORO_VOICES)
-
-            def generate(self, text, gen_config):
-                seen["text"] = text
-                seen["sid"] = gen_config.sid
-                seen["speed"] = gen_config.speed
-                seen.setdefault("generated", []).append(text)
-                return seen.get("audio", FakeAudio())
-
-        sherpa = types.ModuleType("sherpa_onnx")
-        sherpa.GenerationConfig = type("GenerationConfig", (), {})
-
-        class FakeSoundFile:
-            """Stands in for the streaming writer the real code appends to."""
-
-            def __init__(self, path, mode, samplerate, channels, subtype):
-                seen["wav"] = (samplerate, channels, subtype)
-                seen["writes"] = []
-                self._path = Path(path)
-                self._path.write_bytes(b"wav")
-
-            def write(self, samples):
-                seen["writes"].append(samples)
-
-            def close(self):
-                seen["closed"] = True
-
-        soundfile = types.ModuleType("soundfile")
-        soundfile.SoundFile = FakeSoundFile
-
-        def fake_run(cmd, capture_output=False):
-            seen["ffmpeg"] = cmd
-            Path(cmd[-1]).write_bytes(b"mp3")
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-
-        monkeypatch.setitem(sys.modules, "sherpa_onnx", sherpa)
-        monkeypatch.setitem(sys.modules, "soundfile", soundfile)
-        monkeypatch.setattr(tts, "_get_kokoro_tts", FakeEngine)
-        monkeypatch.setattr(subprocess, "run", fake_run)
-        return seen
 
     async def test_maps_the_voice_name_to_a_speaker_id(self, tmp_path, fake_sherpa):
         await tts.synthesize_kokoro("Hello world", tmp_path / "out.mp3", "am_adam")
@@ -414,6 +416,117 @@ class TestSynthesizeKokoro:
         )
         with pytest.raises(RuntimeError, match="only has 11 speakers"):
             await tts.synthesize_kokoro("Hi", tmp_path / "out.mp3", "bf_emma")
+
+
+@pytest.fixture
+def kokoro_state():
+    """The engine cache is process-global; hand it back empty however a test leaves it.
+
+    Including the reaper thread: one left asleep on a long window keeps the next
+    test's from starting.
+    """
+    yield
+    tts._kokoro_tts = None
+    tts._kokoro_users = 0
+    tts._kokoro_idle_since = None
+    reaper = tts._kokoro_reaper
+    tts._kokoro_wake.set()
+    if reaper is not None:
+        reaper.join(timeout=5)
+        assert not reaper.is_alive()
+
+
+def _cache(engine):
+    """Stand in for _get_kokoro_tts: populate the cache slot the way a real load does."""
+    tts._kokoro_tts = engine
+    return engine
+
+
+class TestKokoroIdleUnload:
+    """An onnxruntime session holds its weights and arena until it is destroyed, so
+    the cached engine kept ~2.3 GB of VRAM resident on a CUDA host between jobs —
+    for the whole life of the process, however long the app sat idle."""
+
+    def test_an_idle_model_is_unloaded(self, monkeypatch, kokoro_state):
+        monkeypatch.setattr(tts.config, "KOKORO_IDLE_UNLOAD_SECONDS", 60)
+        tts._kokoro_tts = object()
+        tts._kokoro_idle_since = time.monotonic() - 61
+
+        assert tts._unload_if_idle() == 0.0
+        assert tts._kokoro_tts is None
+
+    def test_a_model_idle_for_less_than_the_window_is_kept(self, monkeypatch, kokoro_state):
+        monkeypatch.setattr(tts.config, "KOKORO_IDLE_UNLOAD_SECONDS", 60)
+        engine = object()
+        tts._kokoro_tts = engine
+        tts._kokoro_idle_since = time.monotonic() - 10
+
+        wait = tts._unload_if_idle()
+        assert tts._kokoro_tts is engine
+        assert 0 < wait <= 50
+
+    def test_a_model_in_use_is_never_unloaded(self, monkeypatch, kokoro_state):
+        """Freeing the engine under a running job would leave the worker calling
+        generate() on a destroyed onnxruntime session."""
+        monkeypatch.setattr(tts.config, "KOKORO_IDLE_UNLOAD_SECONDS", 60)
+        engine = object()
+        monkeypatch.setattr(tts, "_get_kokoro_tts", lambda: _cache(engine))
+
+        with tts._borrow_kokoro_tts():
+            tts._kokoro_idle_since = time.monotonic() - 600  # look maximally idle
+            assert tts._unload_if_idle() == 60
+            assert tts._kokoro_tts is engine
+            assert tts.release_kokoro() is False
+
+    def test_zero_keeps_the_model_resident(self, monkeypatch, kokoro_state):
+        monkeypatch.setattr(tts.config, "KOKORO_IDLE_UNLOAD_SECONDS", 0)
+        engine = object()
+        tts._kokoro_tts = engine
+        tts._kokoro_idle_since = time.monotonic() - 10_000
+
+        assert tts._unload_if_idle() == 0.0
+        assert tts._kokoro_tts is engine
+
+    def test_the_reaper_thread_unloads_after_the_last_job(self, monkeypatch, kokoro_state):
+        monkeypatch.setattr(tts.config, "KOKORO_IDLE_UNLOAD_SECONDS", 0.05)
+        engine = object()
+        monkeypatch.setattr(tts, "_get_kokoro_tts", lambda: _cache(engine))
+
+        with tts._borrow_kokoro_tts():
+            pass
+
+        deadline = time.monotonic() + 5
+        while tts._kokoro_tts is not None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert tts._kokoro_tts is None
+
+    def test_release_reports_whether_anything_was_loaded(self, kokoro_state):
+        assert tts.release_kokoro() is False
+        tts._kokoro_tts = object()
+        assert tts.release_kokoro() is True
+        assert tts._kokoro_tts is None
+
+    async def test_the_model_stays_pinned_for_a_whole_article(
+        self, tmp_path, fake_sherpa, monkeypatch, kokoro_state
+    ):
+        """The unload window can expire between two chunks of a long article."""
+        monkeypatch.setattr(tts.config, "TTS_CHUNK_CHARS", 200)
+        monkeypatch.setattr(tts.config, "KOKORO_IDLE_UNLOAD_SECONDS", 60)
+
+        class Engine:
+            num_speakers = len(tts.KOKORO_VOICES)
+
+            def generate(self, text, cfg):
+                tts._kokoro_idle_since = time.monotonic() - 600
+                tts._unload_if_idle()
+                assert tts._kokoro_tts is self, "the model was freed mid-article"
+                return type("A", (), {"samples": [0.0], "sample_rate": 22050})()
+
+        engine = Engine()
+        monkeypatch.setattr(tts, "_get_kokoro_tts", lambda: _cache(engine))
+
+        text = "\n\n".join(f"Paragraph {i} with plenty of words in it." * 3 for i in range(10))
+        await tts.synthesize_kokoro(text, tmp_path / "out.mp3", "af_heart")
 
 
 class TestGenerateAudio:

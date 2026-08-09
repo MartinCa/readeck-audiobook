@@ -62,6 +62,7 @@ All settings are passed as environment variables (or via `.env`).
 | `TTS_ENGINE` | No | `edge-tts` | `edge-tts` or `kokoro` |
 | `EDGE_TTS_VOICE` | No | `en-US-AriaNeural` | Default voice when language cannot be detected |
 | `KOKORO_VOICE` | No | `af_heart` | Kokoro voice name, only used when `TTS_ENGINE=kokoro` |
+| `KOKORO_IDLE_UNLOAD_SECONDS` | No | `300` | Unload the Kokoro model after this long without a job; `0` keeps it loaded |
 | `MAX_CONCURRENT_JOBS` | No | `2` | Maximum simultaneous TTS jobs |
 | `DATA_DIR` | No | `/app/data` | Where the SQLite database lives |
 | `AUDIO_DIR` | No | `/app/audio` | Where generated MP3s are written |
@@ -143,6 +144,8 @@ docker build -f Dockerfile.kokoro --build-arg KOKORO_ACCEL=cuda -t readeck-audio
 ```
 
 **Verifying the GPU is actually in use.** sherpa-onnx falls back to CPU silently when the CUDA execution provider fails to register — there is no `torch.cuda.is_available()` equivalent to log. Set `KOKORO_DEBUG=1` and check the container logs on the first synthesis for the list of providers that registered, then turn it back off: that flag also makes sherpa-onnx dump the full text of every article to the log, twice (once as hex).
+
+**GPU memory while idle.** The model is loaded on the first Kokoro job and cached, because reloading it per job would add several seconds to every one. An onnxruntime session holds its weights and its allocator arena for as long as it exists, so on CUDA the app sat on roughly 2.3 GB of VRAM between jobs — `nvidia-smi` shows the uvicorn process holding it at 0% utilisation. `KOKORO_IDLE_UNLOAD_SECONDS` (default 300) drops the model once that long passes with no Kokoro job, and the next job loads it again; set it to `0` on a machine dedicated to this app, where holding the memory costs nothing. Note that a few hundred MB of CUDA context stays attached to the process after the unload — the driver keeps it until the process exits — so expect the figure to fall to a few hundred MB rather than to zero.
 
 **`Failed to load library libonnxruntime_providers_cuda.so with error: lib*.so: cannot open shared object file`**: the CUDA build of sherpa-onnx does not bundle the CUDA runtime — unlike the old torch wheels, which did. Those libraries come from the `nvidia-*-cu12` wheels in `requirements-kokoro-cuda.txt`, whose directories `Dockerfile.kokoro` registers with `ldconfig`. If a job fails this way, a library is missing from that list: add the matching wheel (the name follows the library, e.g. `libcurand.so.10` → `nvidia-curand-cu12`) and rebuild. The image build runs `ldd` over the provider and fails if anything is unresolved, so this should be caught at build time rather than on the first job.
 

@@ -1,11 +1,14 @@
 """Text preparation and TTS backend implementations."""
 
 import asyncio
+import contextlib
+import gc
 import html
 import logging
 import os
 import re
 import threading
+import time
 import unicodedata
 from pathlib import Path
 
@@ -371,6 +374,17 @@ _kokoro_tts = None
 # serialize synthesis rather than find out the hard way.
 _kokoro_lock = threading.Lock()
 
+# Guards the cache slot itself and the bookkeeping the idle unload needs. Held
+# only briefly (and never across a generate() call), so an unload can never race
+# a job that is mid-article.
+_kokoro_state_lock = threading.Lock()
+_kokoro_users = 0
+_kokoro_idle_since: float | None = None
+_kokoro_reaper: threading.Thread | None = None
+# Nudges the reaper out of its wait when the state changes under it, so an
+# explicit release doesn't leave a thread sleeping out the old window.
+_kokoro_wake = threading.Event()
+
 
 def _kokoro_model_file(name: str) -> str:
     path = config.KOKORO_MODEL_DIR / name
@@ -383,7 +397,11 @@ def _kokoro_model_file(name: str) -> str:
 
 
 def _get_kokoro_tts():
-    """Lazily construct and cache the sherpa-onnx Kokoro engine (loads the model once)."""
+    """Lazily construct and cache the sherpa-onnx Kokoro engine (loads the model once).
+
+    Call it through `_borrow_kokoro_tts`, which holds the state lock and keeps
+    the result pinned — reaching for the cache directly can race the idle unload.
+    """
     global _kokoro_tts
     if _kokoro_tts is None:
         import sherpa_onnx
@@ -410,11 +428,15 @@ def _get_kokoro_tts():
         # sentence splitting internally, so long articles go in as one string.
         _kokoro_tts = sherpa_onnx.OfflineTts(sherpa_onnx.OfflineTtsConfig(model=model_config))
         logger.info(
-            "Kokoro model loaded from %s: %s speakers (requested provider: %s, threads: %s)",
+            "Kokoro model loaded from %s: %s speakers (requested provider: %s, threads: %s, "
+            "idle unload: %s)",
             config.KOKORO_MODEL_DIR,
             _kokoro_tts.num_speakers,
             provider,
             config.KOKORO_NUM_THREADS,
+            f"{config.KOKORO_IDLE_UNLOAD_SECONDS}s"
+            if config.KOKORO_IDLE_UNLOAD_SECONDS > 0
+            else "disabled",
         )
         if _kokoro_tts.num_speakers != len(KOKORO_VOICES):
             logger.warning(
@@ -432,6 +454,108 @@ def _get_kokoro_tts():
                 "fails to register — set KOKORO_DEBUG=1 to have it log which providers did."
             )
     return _kokoro_tts
+
+
+@contextlib.contextmanager
+def _borrow_kokoro_tts():
+    """Yield the cached engine, pinned against the idle unload for the duration.
+
+    Loading happens under the state lock so two workers starting Kokoro jobs at
+    the same moment build one engine rather than two.
+    """
+    global _kokoro_users, _kokoro_idle_since
+    with _kokoro_state_lock:
+        engine = _get_kokoro_tts()
+        _kokoro_users += 1
+        _kokoro_idle_since = None
+    try:
+        yield engine
+    finally:
+        with _kokoro_state_lock:
+            _kokoro_users -= 1
+            if _kokoro_users == 0:
+                _kokoro_idle_since = time.monotonic()
+                _start_idle_reaper()
+
+
+def _start_idle_reaper() -> None:
+    """Make sure a reaper thread is watching the idle model. Call holding the state lock."""
+    global _kokoro_reaper
+    if _kokoro_tts is None or config.KOKORO_IDLE_UNLOAD_SECONDS <= 0:
+        return
+    if _kokoro_reaper is not None and _kokoro_reaper.is_alive():
+        return
+    _kokoro_reaper = threading.Thread(
+        target=_idle_reaper_loop, name="kokoro-idle-unload", daemon=True
+    )
+    _kokoro_reaper.start()
+
+
+def _unload_if_idle() -> float:
+    """Unload the cached engine if it has gone unused for long enough.
+
+    Returns how many seconds to wait before looking again, or 0 when there is
+    nothing left to watch.
+    """
+    global _kokoro_tts, _kokoro_idle_since
+    with _kokoro_state_lock:
+        timeout = config.KOKORO_IDLE_UNLOAD_SECONDS
+        if _kokoro_tts is None or timeout <= 0:
+            return 0.0
+        if _kokoro_users > 0 or _kokoro_idle_since is None:
+            return float(timeout)
+        idle = time.monotonic() - _kokoro_idle_since
+        if idle < timeout:
+            return timeout - idle
+        engine, _kokoro_tts, _kokoro_idle_since = _kokoro_tts, None, None
+    # Dropping the last reference runs sherpa-onnx's destructor, which tears the
+    # onnxruntime session down and hands its memory — VRAM under the CUDA
+    # provider — back. gc.collect() because the engine can sit in a cycle, and
+    # until it is actually collected nothing has been freed.
+    del engine
+    gc.collect()
+    logger.info(
+        "Kokoro model unloaded after %.0fs idle, releasing its memory. The next Kokoro "
+        "job reloads it.",
+        idle,
+    )
+    return 0.0
+
+
+def _idle_reaper_loop() -> None:
+    global _kokoro_reaper
+    while True:
+        # Cleared before the check, never after the wait, so a wake-up raised
+        # while the check runs still shortens the wait that follows it.
+        _kokoro_wake.clear()
+        wait = _unload_if_idle()
+        if wait <= 0:
+            with _kokoro_state_lock:
+                # A job may have loaded a fresh engine while the old one was
+                # being torn down; that one needs watching too.
+                if _kokoro_tts is not None and config.KOKORO_IDLE_UNLOAD_SECONDS > 0:
+                    continue
+                _kokoro_reaper = None
+                return
+        _kokoro_wake.wait(wait)
+
+
+def release_kokoro() -> bool:
+    """Drop the cached Kokoro engine now, freeing its memory. True if one was loaded.
+
+    Used at shutdown: onnxruntime tearing a CUDA session down during interpreter
+    exit is a well-known way to hang or crash on the way out.
+    """
+    global _kokoro_tts, _kokoro_idle_since
+    with _kokoro_state_lock:
+        if _kokoro_tts is None or _kokoro_users > 0:
+            return False
+        engine, _kokoro_tts, _kokoro_idle_since = _kokoro_tts, None, None
+    del engine
+    gc.collect()
+    _kokoro_wake.set()
+    logger.info("Kokoro model unloaded")
+    return True
 
 
 async def synthesize_kokoro(text: str, output_path: Path, voice: str = ""):
@@ -456,67 +580,71 @@ async def synthesize_kokoro(text: str, output_path: Path, voice: str = ""):
         raise ValueError("No readable text to synthesize")
 
     def _run_sync():
-        engine = _get_kokoro_tts()
-        if sid >= engine.num_speakers:
-            raise RuntimeError(
-                f"Kokoro voice {voice!r} maps to speaker id {sid}, but the loaded "
-                f"model only has {engine.num_speakers} speakers."
-            )
-        gen_config = sherpa_onnx.GenerationConfig()
-        gen_config.sid = sid
-        gen_config.speed = 1.0
+        # Borrowed for the whole article rather than per chunk: the idle unload
+        # must not pull the model out from under a job that is halfway through.
+        with _borrow_kokoro_tts() as engine:
+            if sid >= engine.num_speakers:
+                raise RuntimeError(
+                    f"Kokoro voice {voice!r} maps to speaker id {sid}, but the loaded "
+                    f"model only has {engine.num_speakers} speakers."
+                )
+            gen_config = sherpa_onnx.GenerationConfig()
+            gen_config.sid = sid
+            gen_config.speed = 1.0
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            wav_path = Path(tmp.name)
-        try:
-            # Appended to the WAV as each piece is produced rather than
-            # concatenated at the end, so peak memory stays at one chunk of audio
-            # however long the article is.
-            writer = None
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                wav_path = Path(tmp.name)
             try:
-                for index, chunk in enumerate(chunks, 1):
-                    with _kokoro_lock:
-                        audio = engine.generate(chunk, gen_config)
-                    if audio.sample_rate <= 0 or len(audio.samples) == 0:
-                        raise RuntimeError(
-                            f"Kokoro produced no audio for chunk {index}/{len(chunks)}"
-                        )
-                    if writer is None:
-                        writer = sf.SoundFile(
-                            str(wav_path),
-                            mode="w",
-                            samplerate=audio.sample_rate,
-                            channels=1,
-                            subtype="PCM_16",
-                        )
-                    writer.write(audio.samples)
-                    del audio
-            finally:
-                if writer is not None:
-                    writer.close()
+                # Appended to the WAV as each piece is produced rather than
+                # concatenated at the end, so peak memory stays at one chunk of
+                # audio however long the article is.
+                writer = None
+                try:
+                    for index, chunk in enumerate(chunks, 1):
+                        with _kokoro_lock:
+                            audio = engine.generate(chunk, gen_config)
+                        if audio.sample_rate <= 0 or len(audio.samples) == 0:
+                            raise RuntimeError(
+                                f"Kokoro produced no audio for chunk {index}/{len(chunks)}"
+                            )
+                        if writer is None:
+                            writer = sf.SoundFile(
+                                str(wav_path),
+                                mode="w",
+                                samplerate=audio.sample_rate,
+                                channels=1,
+                                subtype="PCM_16",
+                            )
+                        writer.write(audio.samples)
+                        del audio
+                finally:
+                    if writer is not None:
+                        writer.close()
 
-            ffmpeg_cmd = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(wav_path),
-                "-codec:a",
-                "libmp3lame",
-                "-qscale:a",
-                "2",
-                # generate_audio synthesizes to a "<name>.mp3.part" sibling and
-                # renames it into place, and ffmpeg picks its muxer from the
-                # extension — ".part" means nothing to it. State the format.
-                "-f",
-                "mp3",
-                str(output_path),
-            ]
-            result = subprocess.run(ffmpeg_cmd, capture_output=True)
-            if result.returncode != 0:
-                stderr = result.stderr.decode(errors="replace")
-                raise RuntimeError(f"ffmpeg failed encoding Kokoro output to mp3: {stderr[-2000:]}")
-        finally:
-            wav_path.unlink(missing_ok=True)
+                ffmpeg_cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(wav_path),
+                    "-codec:a",
+                    "libmp3lame",
+                    "-qscale:a",
+                    "2",
+                    # generate_audio synthesizes to a "<name>.mp3.part" sibling
+                    # and renames it into place, and ffmpeg picks its muxer from
+                    # the extension — ".part" means nothing to it. State it.
+                    "-f",
+                    "mp3",
+                    str(output_path),
+                ]
+                result = subprocess.run(ffmpeg_cmd, capture_output=True)
+                if result.returncode != 0:
+                    stderr = result.stderr.decode(errors="replace")
+                    raise RuntimeError(
+                        f"ffmpeg failed encoding Kokoro output to mp3: {stderr[-2000:]}"
+                    )
+            finally:
+                wav_path.unlink(missing_ok=True)
 
     await asyncio.to_thread(_run_sync)
 

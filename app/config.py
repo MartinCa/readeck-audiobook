@@ -46,6 +46,12 @@ KOKORO_MODEL_DIR = _env_path("KOKORO_MODEL_DIR", "/app/models/kokoro")
 # actually-loaded provider gets logged.
 KOKORO_PROVIDER = os.environ.get("KOKORO_PROVIDER", "cpu")
 KOKORO_NUM_THREADS = _env_int("KOKORO_NUM_THREADS", 2)
+# The loaded model is cached between jobs, and an onnxruntime session holds its
+# weights and its allocator arena for as long as it exists — on CUDA that is a
+# couple of GB of VRAM held by an idle app. Drop the model after this many
+# seconds without a Kokoro job; the next one reloads it (a few seconds). 0 keeps
+# it resident, which is the right choice on a machine dedicated to this app.
+KOKORO_IDLE_UNLOAD_SECONDS = _env_int("KOKORO_IDLE_UNLOAD_SECONDS", 300, minimum=0)
 # sherpa-onnx's verbose output, which names the execution providers that
 # actually registered — the only way to confirm CUDA is really in use. Off by
 # default because it also dumps the full text of every article being synthesized
