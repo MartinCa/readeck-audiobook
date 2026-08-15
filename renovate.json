@@ -2,5 +2,17 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>MartinCa/renovate-config"
+  ],
+  "packageRules": [
+    {
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
+      "automerge": true,
+      "matchPackagesNames": [
+        "sherpa-onnx"
+      ]
+    }
   ]
 }
