@@ -3,5 +3,5 @@
 # torch, transformers or spaCy behind it. Kept out of the default
 # requirements.txt anyway so the base image carries no TTS model machinery.
 -r requirements.txt
-sherpa-onnx==1.13.4
+sherpa-onnx==1.13.5
 soundfile==0.14.0
