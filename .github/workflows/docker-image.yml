@@ -48,7 +48,7 @@ jobs:
           # PR-branch GHA caches are evicted after 7 days, but their manifests
           # keep referencing the missing blobs, which fails buildx on import.
           # Only reuse (and refresh) the cache from push builds on main.
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
             echo "cache-from=type=gha,scope=${{ matrix.variant }}" >> "$GITHUB_OUTPUT"
             echo "cache-to=type=gha,mode=max,scope=${{ matrix.variant }}" >> "$GITHUB_OUTPUT"
           else
