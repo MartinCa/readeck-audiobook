@@ -219,7 +219,7 @@ pytest              # run all tests
 
 Local hooks are managed by [lefthook](https://lefthook.dev/) from the shared
 [`MartinCa/lefthook-configs`](https://github.com/MartinCa/lefthook-configs)
-fragments pinned at `v2.0.1` in `lefthook.yml`. Human contributors install it
+fragments pinned at `v2.1.0` in `lefthook.yml`. Human contributors install it
 once per clone:
 
 ```bash
@@ -234,7 +234,8 @@ image; if `lefthook` is not on `PATH`, they should report this to the user (see
 Pre-commit runs `uvx ruff check --fix` and `uvx ruff format` on staged Python
 (re-staging fixes), a `betterleaks` secret scan of the staged diff, and a
 `zizmor` audit of staged workflow files; commit-msg enforces Conventional
-Commits. `lefthook`, `betterleaks`, and `zizmor` must be on `PATH`, and
+Commits; pre-push runs the test suite (`uv run pytest`). `lefthook`,
+`betterleaks`, and `zizmor` must be on `PATH`, and
 `LEFTHOOK=0 git commit` skips the hooks as a last resort. See `AGENTS.md` for
 the exact hooks-vs-CI enforcement split.
 
