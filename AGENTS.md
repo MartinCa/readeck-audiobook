@@ -4,7 +4,7 @@ AI agents should read [`CLAUDE.md`](CLAUDE.md) first: it is the canonical contri
 
 ## Git hooks
 
-Local git hooks come from the shared [`MartinCa/lefthook-configs`](https://github.com/MartinCa/lefthook-configs) fragments pinned at `v2.0.1` in [`lefthook.yml`](lefthook.yml).
+Local git hooks come from the shared [`MartinCa/lefthook-configs`](https://github.com/MartinCa/lefthook-configs) fragments pinned at `v2.1.0` in [`lefthook.yml`](lefthook.yml).
 
 **AI agents**: do not install the lefthook binary yourself — it is included in the OpenCode image. If `lefthook` is not on `PATH`, report this to the user and ask whether to install it.
 
@@ -21,6 +21,7 @@ The hooks run:
 
 - **pre-commit** — `langs/python.yml` lints and formats staged `*.py`/`*.pyi` files (`uvx ruff check --fix` + `uvx ruff format`, re-staging fixes via `stage_fixed`); `lefthook-shared.yml` scans the staged diff with `betterleaks` (blocks the commit on a leak) and audits staged `.github/workflows/*` files with `zizmor` (blocks on a finding).
 - **commit-msg** — `commit-msg.yml` enforces [Conventional Commits](https://www.conventionalcommits.org/), e.g. `feat: ...`, `fix(api): ...`.
+- **pre-push** — `pre-push-python.yml` runs the test suite (`uv run pytest`) before every push, blocking the push on any failure.
 
 Three tools must be on `PATH` for the hooks: `lefthook`, `betterleaks` (secret scan), and `zizmor` (workflow audit). If a tool is missing, `LEFTHOOK=0 git commit` skips the hooks entirely — a pragmatic escape hatch for restricted setups, not a way to dodge the gates.
 
