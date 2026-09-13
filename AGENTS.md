@@ -22,4 +22,4 @@ The hooks run:
 
 Three tools must be on `PATH` for the hooks: `lefthook`, `betterleaks` (secret scan), and `zizmor` (workflow audit). If a tool is missing, `LEFTHOOK=0 git commit` skips the hooks entirely — a pragmatic escape hatch for restricted setups, not a way to dodge the gates.
 
-Hooks vs CI: `ci.yml` runs `ruff check` and `ruff format --check`, `pytest`, Docker builds, plus a `zizmor` job (`uvx zizmor@1.29.0 --format sarif .`) that uploads a SARIF report to code scanning — a finding fails that job, but nothing in this repo's workflows wires it (or betterleaks) to PR checks. `betterleaks` and the commit-msg validation run **only** as local hooks, so do not bypass them.
+Hooks vs CI: `ci.yml` runs `ruff check` and `ruff format --check`, `pytest`, Docker builds, plus a `zizmor` job (`uvx zizmor@1.29.0 --format sarif .`) that shows on PRs and uploads a SARIF report to code scanning — SARIF mode exits 0 on findings by design, so that job cannot fail them; findings surface in code scanning. `betterleaks` and the commit-msg validation run **only** as local hooks (no CI equivalent), so do not bypass them.
