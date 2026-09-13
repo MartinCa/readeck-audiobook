@@ -4,9 +4,11 @@ AI agents should read [`CLAUDE.md`](CLAUDE.md) first: it is the canonical contri
 
 ## Git hooks
 
-Local git hooks come from the shared [`MartinCa/lefthook-configs`](https://github.com/MartinCa/lefthook-configs) fragments pinned at `v2.0.0` in [`lefthook.yml`](lefthook.yml).
+Local git hooks come from the shared [`MartinCa/lefthook-configs`](https://github.com/MartinCa/lefthook-configs) fragments pinned at `v2.0.1` in [`lefthook.yml`](lefthook.yml).
 
-Install them (or re-install after a fresh clone):
+**AI agents**: do not install the lefthook binary yourself — it is included in the OpenCode image. If `lefthook` is not on `PATH`, report this to the user and ask whether to install it.
+
+Human contributors install it (or re-install after a fresh clone):
 
 ```sh
 uv tool install lefthook@2.1.12   # standalone binary; first install only

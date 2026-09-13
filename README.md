@@ -219,12 +219,17 @@ pytest              # run all tests
 
 Local hooks are managed by [lefthook](https://lefthook.dev/) from the shared
 [`MartinCa/lefthook-configs`](https://github.com/MartinCa/lefthook-configs)
-fragments pinned at `v2.0.0` in `lefthook.yml`. Install once per clone:
+fragments pinned at `v2.0.1` in `lefthook.yml`. Human contributors install it
+once per clone:
 
 ```bash
 uv tool install lefthook@2.1.12  # standalone binary into uv's tool bin dir (default ~/.local/bin)
 lefthook install                 # idempotent, safe to re-run
 ```
+
+AI agents must not install lefthook themselves — it is included in the OpenCode
+image; if `lefthook` is not on `PATH`, they should report this to the user (see
+`AGENTS.md`).
 
 Pre-commit runs `uvx ruff check --fix` and `uvx ruff format` on staged Python
 (re-staging fixes), a `betterleaks` secret scan of the staged diff, and a
