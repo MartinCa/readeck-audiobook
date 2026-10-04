@@ -46,7 +46,7 @@ async def test_settings_round_trip():
 async def test_run_queues_new_articles_oldest_first(readeck_articles):
     # Readeck lists newest first.
     readeck_articles("newest", "older", "oldest")
-    assert await autogen.run_once() == 3
+    assert await autogen.run_once() == (3, 0)
     jobs, _ = await models.list_jobs()
     queued_order = [j["bookmark_id"] for j in reversed(jobs)]
     assert queued_order == ["oldest", "older", "newest"]
@@ -74,15 +74,15 @@ async def test_run_skips_excluded_and_previously_queued_bookmarks(readeck_articl
     deleted = await models.create_job("deleted-audio", "T", "http://x", "edge-tts", "v")
     await models.delete_job(deleted["id"])
 
-    assert await autogen.run_once() == 1
+    assert await autogen.run_once() == (1, 0)
     jobs, _ = await models.list_jobs()
     assert {j["bookmark_id"] for j in jobs} == {"had-a-job", "fresh"}
 
 
 async def test_run_is_idempotent(readeck_articles):
     readeck_articles("a")
-    assert await autogen.run_once() == 1
-    assert await autogen.run_once() == 0
+    assert await autogen.run_once() == (1, 0)
+    assert await autogen.run_once() == (0, 0)
 
 
 async def test_run_records_its_outcome(readeck_articles, monkeypatch):

@@ -227,6 +227,21 @@ async def delete_job(job_id: str, statuses: tuple[str, ...] | None = None) -> di
         return dict(row) if row else None
 
 
+async def delete_jobs(job_ids: list[str], statuses: tuple[str, ...] | None = None) -> list[dict]:
+    """Delete several jobs, optionally only those with one of `statuses`; returns the rows."""
+    where = f" AND status IN ({', '.join('?' * len(statuses))})" if statuses else ""
+    deleted: list[dict] = []
+    async with _connect() as db:
+        for chunk in _chunks(list(dict.fromkeys(job_ids))):
+            placeholders = ", ".join("?" * len(chunk))
+            async with db.execute(
+                f"DELETE FROM jobs WHERE id IN ({placeholders}){where} RETURNING *",
+                (*chunk, *(statuses or ())),
+            ) as cur:
+                deleted.extend(dict(r) for r in await cur.fetchall())
+    return deleted
+
+
 async def list_job_ids(statuses: tuple[str, ...] | None = None) -> list[str]:
     """Return every job id, unpaginated (used for "select all" bulk actions)."""
     where, params = _status_filter(statuses)

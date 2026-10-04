@@ -8,6 +8,21 @@ export function formatDay(iso: string | null | undefined): string {
   return isValid(date) ? format(date, "d MMM yyyy") : "—";
 }
 
+/**
+ * The UTC calendar day of a timestamp, e.g. "4 Oct 2026". For publication
+ * dates: sites mostly give a bare date, which Readeck stores as midnight UTC,
+ * and the server filters on the UTC day too.
+ */
+export function formatUtcDay(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const date = parseISO(iso);
+  if (!isValid(date)) return "—";
+  return format(
+    new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    "d MMM yyyy",
+  );
+}
+
 /** "4 Oct 2026, 14:05" in the viewer's time zone. */
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";

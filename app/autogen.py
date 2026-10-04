@@ -81,8 +81,12 @@ async def load_run_state() -> RunState:
     )
 
 
-async def run_once(settings: AutoGenSettings | None = None) -> int:
-    """Queue every eligible article; returns how many were queued."""
+async def run_once(settings: AutoGenSettings | None = None) -> tuple[int, int]:
+    """Queue every eligible article; returns (queued, skipped).
+
+    Skipped are eligible articles that turned out to have a job running
+    already, say one queued by hand while this run was reading Readeck.
+    """
     settings = settings or await load_settings()
     state = RunState(last_run=datetime.now(UTC))
     try:
@@ -94,11 +98,11 @@ async def run_once(settings: AutoGenSettings | None = None) -> int:
         skip = await models.queued_bookmark_ids() | await models.auto_excluded_ids()
         eligible = {bm["id"]: bm for bm in candidates if bm["id"] not in skip}
         # Oldest first, so the queue works through the backlog in order.
-        queued, _ = await jobs.queue_bookmarks(list(reversed(eligible)), prefetched=eligible)
+        queued, skipped = await jobs.queue_bookmarks(list(reversed(eligible)), prefetched=eligible)
         state.last_queued = queued
         if queued:
             logger.info("Auto generation queued %d bookmark(s)", queued)
-        return queued
+        return queued, skipped
     except Exception as exc:
         state.last_error = str(exc)
         raise

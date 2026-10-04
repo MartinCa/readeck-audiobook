@@ -273,9 +273,11 @@ async def retry_job(job_id: str):
 
 @app.delete("/api/jobs/{job_id}", status_code=204)
 async def delete_job(job_id: str):
-    job = await models.delete_job(job_id)
+    # As with bulk delete: a job that completed since the list loaded is now
+    # its bookmark's audio, and is deleted from the bookmark instead.
+    job = await models.delete_job(job_id, statuses=models.OPEN_STATUSES)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="No queued or failed job with that id")
     jobs.remove_audio_files([job])
     return Response(status_code=204)
 
@@ -284,11 +286,7 @@ async def delete_job(job_id: str):
 async def bulk_delete_jobs(body: JobIds):
     # Only open jobs: one that completed since the list was loaded is now a
     # bookmark's audio, which this action must not take away.
-    deleted = [
-        job
-        for job_id in dict.fromkeys(body.job_ids)
-        if (job := await models.delete_job(job_id, statuses=models.OPEN_STATUSES))
-    ]
+    deleted = await models.delete_jobs(body.job_ids, statuses=models.OPEN_STATUSES)
     jobs.remove_audio_files(deleted)
     return CountResult(count=len(deleted))
 
@@ -339,8 +337,8 @@ async def update_settings(body: SettingsUpdate):
 
 @app.post("/api/auto-generation/run", response_model=QueueResult)
 async def run_auto_generation():
-    queued = await autogen.run_once()
-    return QueueResult(queued=queued, skipped=0)
+    queued, skipped = await autogen.run_once()
+    return QueueResult(queued=queued, skipped=skipped)
 
 
 # ── File download ──────────────────────────────────────────────────────────────

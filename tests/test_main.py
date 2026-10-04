@@ -364,6 +364,13 @@ async def test_delete_job(client):
     assert (await client.delete(f"/api/jobs/{job['id']}")).status_code == 404
 
 
+async def test_delete_job_leaves_completed_audio_alone(client):
+    job = await models.create_job("bm1", "Test", "http://x", "edge-tts", "v")
+    await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="a.mp3")
+    assert (await client.delete(f"/api/jobs/{job['id']}")).status_code == 404
+    assert await models.get_job(job["id"])
+
+
 async def test_bulk_delete_jobs(client):
     a = await models.create_job("a", "A", "http://x", "edge-tts", "v")
     b = await models.create_job("b", "B", "http://x", "edge-tts", "v")
@@ -460,13 +467,6 @@ async def test_audio_download_rejects_a_symlink_escaping_the_directory(client, a
     outside.write_bytes(b"private")
     (audio_dir / "link.mp3").symlink_to(outside)
     assert (await client.get("/api/audio/link.mp3")).status_code == 404
-
-
-async def test_delete_job_removes_its_audio_file(client, audio_dir):
-    job = await _completed("bm1", "t-abc.mp3")
-    (audio_dir / "t-abc.mp3").write_bytes(b"x")
-    assert (await client.delete(f"/api/jobs/{job['id']}")).status_code == 204
-    assert not (audio_dir / "t-abc.mp3").exists()
 
 
 # ── Frontend ───────────────────────────────────────────────────────────────────

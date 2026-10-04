@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { formatDay, formatDateTime } from "@/lib/format";
+import { formatDateTime, formatDay, formatUtcDay } from "@/lib/format";
 import type { Bookmark } from "@/lib/types";
 
 interface BookmarkCardProps {
@@ -53,8 +53,8 @@ export function BookmarkCard({ bookmark, selected, onSelectedChange }: BookmarkC
             <p className="text-muted-foreground text-xs break-words">{meta.join(" · ")}</p>
           )}
           <p className="text-muted-foreground text-xs">
-            Published {bookmark.published ? formatDay(bookmark.published) : "date unknown"} · Added{" "}
-            {formatDay(bookmark.added)}
+            Published {bookmark.published ? formatUtcDay(bookmark.published) : "date unknown"} ·
+            Added {formatDay(bookmark.added)}
           </p>
           {bookmark.description && (
             <p className="text-muted-foreground line-clamp-2 text-sm">{bookmark.description}</p>

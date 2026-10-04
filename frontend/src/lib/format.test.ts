@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeCron, formatDay, plural } from "@/lib/format";
+import { describeCron, formatDay, formatUtcDay, plural } from "@/lib/format";
 
 describe("formatDay", () => {
   it("formats an ISO timestamp as a day", () => {
@@ -9,6 +9,18 @@ describe("formatDay", () => {
   it("shows a dash for a missing or broken date", () => {
     expect(formatDay(null)).toBe("—");
     expect(formatDay("not a date")).toBe("—");
+  });
+});
+
+describe("formatUtcDay", () => {
+  it("uses the UTC day whatever the viewer's time zone", () => {
+    expect(formatUtcDay("2025-07-01T00:00:00Z")).toBe("1 Jul 2025");
+    expect(formatUtcDay("2025-06-30T23:30:00Z")).toBe("30 Jun 2025");
+  });
+
+  it("shows a dash for a missing or broken date", () => {
+    expect(formatUtcDay(undefined)).toBe("—");
+    expect(formatUtcDay("nope")).toBe("—");
   });
 });
 
