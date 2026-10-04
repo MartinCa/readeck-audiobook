@@ -2,7 +2,7 @@ import base64
 import hmac
 import logging
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import autogen, bookmarks, config, jobs, models, readeck, tts
+from app import autogen, bookmarks, config, jobs, models, readeck, scheduler, sync, tts
 from app.schemas import (
     AutoExclusionUpdate,
     AutoGenerationStatus,
@@ -27,6 +27,7 @@ from app.schemas import (
     QueueResult,
     Settings,
     SettingsUpdate,
+    SyncStatus,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -71,11 +72,14 @@ async def lifespan(app: FastAPI):
         logger.info("Removed %d orphaned audio file(s)", orphans)
 
     jobs.start_worker()
-    autogen.start_scheduler()
+    # Catch up with whatever changed in Readeck while the app was down.
+    sync.start_background()
+    scheduler.start([sync.schedule, autogen.schedule])
     try:
         yield
     finally:
-        await autogen.stop_scheduler()
+        await scheduler.stop()
+        await sync.stop()
         await jobs.stop_worker()
         await readeck.close_client()
         # After the workers are done, so nothing is mid-synthesis. Tearing an
@@ -124,7 +128,7 @@ async def validation_error(request: Request, exc: RequestValidationError):
 
 @app.exception_handler(readeck.ReadeckError)
 async def readeck_error(request: Request, exc: readeck.ReadeckError):
-    return problem(502, "Could not load bookmarks from Readeck", str(exc))
+    return problem(502, "Could not reach Readeck", str(exc))
 
 
 # ── Middleware ─────────────────────────────────────────────────────────────────
@@ -294,22 +298,38 @@ async def bulk_delete_jobs(body: JobIds):
 # ── Settings ───────────────────────────────────────────────────────────────────
 
 
+def _next_run(schedule: scheduler.Schedule, cron: str) -> datetime | None:
+    if not scheduler.valid_cron(cron):
+        return None
+    return schedule.next_run(cron) or scheduler.next_run(cron)
+
+
 async def _settings_response() -> Settings:
+    sync_cron = await sync.load_cron()
+    sync_state = await sync.load_state()
     current = await autogen.load_settings()
     state = await autogen.load_run_state()
-    next_run = None
-    if current.enabled and autogen.valid_cron(current.cron):
-        next_run = autogen.scheduled_next_run(current.cron) or autogen.next_run(current.cron)
     return Settings(
+        sync=SyncStatus(
+            cron=sync_cron,
+            running=sync.is_running(),
+            bookmark_count=await models.count_bookmarks(),
+            next_run=_next_run(sync.schedule, sync_cron),
+            last_run=sync_state.last_run,
+            last_error=sync_state.last_error,
+            added=sync_state.added,
+            updated=sync_state.updated,
+            removed=sync_state.removed,
+        ),
         auto_generation=AutoGenerationStatus(
             enabled=current.enabled,
             since=current.since,
             cron=current.cron,
-            next_run=next_run,
+            next_run=_next_run(autogen.schedule, current.cron) if current.enabled else None,
             last_run=state.last_run,
             last_queued=state.last_queued,
             last_error=state.last_error,
-        )
+        ),
     )
 
 
@@ -320,18 +340,30 @@ async def get_settings():
 
 @app.put("/api/settings", response_model=Settings)
 async def update_settings(body: SettingsUpdate):
-    update = body.auto_generation
-    cron = update.cron.strip()
-    if not autogen.valid_cron(cron):
+    errors: dict[str, list[str]] = {}
+    sync_cron = body.sync.cron.strip() if body.sync else None
+    auto = body.auto_generation
+    auto_cron = auto.cron.strip() if auto else None
+    for field, cron in (("sync.cron", sync_cron), ("autoGeneration.cron", auto_cron)):
+        if cron is not None and not scheduler.valid_cron(cron):
+            errors[field] = ["Not a valid cron expression, e.g. 0 * * * *"]
+    if errors:
         return problem(
-            422,
-            "Validation failed",
-            "The schedule is not a valid cron expression.",
-            {"autoGeneration.cron": ["Not a valid cron expression, e.g. 0 * * * *"]},
+            422, "Validation failed", "The schedule is not a valid cron expression.", errors
         )
-    await autogen.save_settings(
-        autogen.AutoGenSettings(enabled=update.enabled, since=update.since, cron=cron)
-    )
+    if sync_cron is not None:
+        await sync.save_cron(sync_cron)
+    if auto is not None:
+        await autogen.save_settings(
+            autogen.AutoGenSettings(enabled=auto.enabled, since=auto.since, cron=auto_cron)
+        )
+    return await _settings_response()
+
+
+@app.post("/api/sync/run", response_model=Settings, status_code=202)
+async def run_sync():
+    """Start a sync with Readeck in the background; poll the settings for its result."""
+    sync.start_background()
     return await _settings_response()
 
 

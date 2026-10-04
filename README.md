@@ -7,6 +7,7 @@ Browse your Readeck library, select articles, queue them for audio generation, a
 ## Features
 
 - Paginated, searchable bookmark browser for your Readeck instance, showing each article's publish date and the date it was added to Readeck
+- A local copy of the Readeck library, synced on its own cron schedule, so filtering stays fast with thousands of bookmarks; bookmarks deleted in Readeck are removed here too, audio included
 - Filters: has audio or not, excluded from auto generation or not, and optional start/end dates for when an article was published and when it was added to Readeck
 - Finished audio lives on its bookmark, with a player and a download link; bulk-delete audio or bulk-exclude bookmarks from auto generation
 - Optional **auto audio generation** on a cron schedule (see below)
@@ -101,14 +102,24 @@ The voice is automatically selected based on the bookmark's `lang` field:
 
 Any unlisted language falls back to `EDGE_TTS_VOICE`. The engine and voice are resolved once, when the job is queued, and stored on the job — so the Jobs page always reports what actually ran.
 
+## Readeck sync
+
+The Bookmarks page and auto generation work from a local copy of your Readeck library in the app's database. The app syncs when it starts and then on a cron schedule you set under **Settings** (default `*/15 * * * *`, every 15 minutes, in the container's time zone). **Sync now** on the Settings page runs one immediately.
+
+A sync asks Readeck's sync endpoint for every bookmark id with its last-updated time in one request, then fetches only the bookmarks that are new or changed. A bookmark Readeck no longer has is checked once more and then removed here, along with its jobs and audio files. An older Readeck without the sync endpoint works too, at the cost of reading the full bookmark list each time.
+
+Search on the Bookmarks page matches the title, site, authors, description and URL of the local copy, not the article text.
+
+If a bookmark is deleted in Readeck while its audio is queued or generating, the job is dropped quietly rather than reported as failed.
+
 ## Auto audio generation
 
 Turn it on under **Settings** in the web UI (it is off by default; the settings live in the database, not the environment):
 
-- **Schedule** — a cron expression (default `0 * * * *`, hourly), read in the container's time zone (`TZ`). On each run the app asks Readeck for articles and queues the ones that need audio.
+- **Schedule** — a cron expression (default `0 * * * *`, hourly), read in the container's time zone (`TZ`). On each run the app looks through the local copy of Readeck (see above) for articles and queues the ones that need audio; the worker then fetches each article's text from Readeck.
 - **Only articles added on or after** — optional. Leave it empty to generate audio for every existing article as well as new ones; set a date to leave older articles alone.
 
-A run queues an article only if it has never had a job before and is not excluded, so each article is picked up once: deleting its audio, or a failed job, does not make the next run try again (use **Generate audio** or **Retry** for that). Videos and pictures are skipped. To keep particular bookmarks out, select them on the Bookmarks page and choose **Exclude from auto generation**. **Run now** on the Settings page does a run immediately.
+A run queues an article only if Readeck has finished loading it, it has never had a job before and it is not excluded, so each article is picked up once: deleting its audio, or a failed job, does not make the next run try again (use **Generate audio** or **Retry** for that). Videos and pictures are skipped. To keep particular bookmarks out, select them on the Bookmarks page and choose **Exclude from auto generation**. **Run now** on the Settings page does a run immediately.
 
 ## Output files
 
@@ -173,8 +184,10 @@ readeck-audiobook/
 │   ├── main.py        # FastAPI JSON API, middleware, lifespan, serves the web UI
 │   ├── config.py      # Environment-driven settings
 │   ├── schemas.py     # API request/response models (camelCase on the wire)
-│   ├── bookmarks.py   # Bookmark listing: Readeck + local audio/exclusion filters
-│   ├── autogen.py     # Auto audio generation settings and cron scheduler
+│   ├── bookmarks.py   # Bookmark listing and filters over the local copy
+│   ├── sync.py        # Keeps the local copy of Readeck current
+│   ├── autogen.py     # Auto audio generation settings and runs
+│   ├── scheduler.py   # Cron loop shared by the sync and auto generation
 │   ├── readeck.py     # Readeck API client (pooled httpx)
 │   ├── tts.py         # Text cleaning, filenames, TTS backends
 │   ├── jobs.py        # Queueing and the background worker loop
@@ -196,7 +209,7 @@ Both images build on Python 3.14. CI runs the suite on 3.12 (the declared minimu
 **How a job flows:**
 
 1. User selects bookmarks on the Bookmarks page and clicks **Generate audio** (or the auto generation schedule picks them up)
-2. The selected bookmarks are fetched from Readeck concurrently, and a `Job` row is inserted per bookmark with `status=pending`, recording the article's language and the engine/voice resolved from it
+2. The selected bookmarks' title and language are read from the local copy of Readeck, and a `Job` row is inserted per bookmark with `status=pending`, recording the article's language and the engine/voice resolved from it
 3. The background worker atomically claims pending jobs (up to `MAX_CONCURRENT_JOBS` at a time) and marks them `processing`
 4. The worker fetches the article text (Markdown preferred, HTML fallback) and strips markup down to speakable prose
 5. The recorded TTS engine synthesises the audio in chunks, retrying failures, and writes an MP3 to `AUDIO_DIR` via a temp file so a crash cannot leave a truncated download

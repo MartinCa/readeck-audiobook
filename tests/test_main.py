@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app import bookmarks, config, models, readeck
+from app import config, models, readeck
 
 
 async def _completed(bookmark_id: str, audio_path: str, title: str = "T") -> dict:
@@ -30,19 +30,13 @@ def _bookmark(bid: str, **extra) -> dict:
 
 
 @pytest.fixture
-def readeck_page(monkeypatch):
-    """Stub the Readeck listing; returns the mock so tests can inspect calls."""
+def stored(db_ready, store_bookmarks):
+    return store_bookmarks
 
-    def install(items: list[dict]):
-        mock = AsyncMock(
-            return_value={"items": items, "total": len(items), "total_pages": 1, "current_page": 1}
-        )
-        monkeypatch.setattr("app.readeck.list_bookmarks", mock)
-        monkeypatch.setattr("app.readeck.list_all_bookmarks", AsyncMock(return_value=items))
-        bookmarks.clear_cache()
-        return mock
 
-    return install
+@pytest.fixture
+def db_ready(client):
+    """The client fixture sets up the database the bookmarks are stored in."""
 
 
 async def test_health(client):
@@ -54,8 +48,8 @@ async def test_health(client):
 # ── Bookmarks ──────────────────────────────────────────────────────────────────
 
 
-async def test_bookmarks_are_camel_case_with_both_dates(client, readeck_page):
-    readeck_page([_bookmark("a", published="2025-12-24T00:00:00Z", reading_time=4)])
+async def test_bookmarks_are_camel_case_with_both_dates(client, stored):
+    await stored([_bookmark("a", published="2025-12-24T00:00:00Z", reading_time=4)])
     resp = await client.get("/api/bookmarks")
     assert resp.status_code == 200
     body = resp.json()
@@ -70,16 +64,16 @@ async def test_bookmarks_are_camel_case_with_both_dates(client, readeck_page):
     assert item["autoExcluded"] is False
 
 
-async def test_bookmark_shows_its_audio(client, readeck_page):
-    readeck_page([_bookmark("a")])
+async def test_bookmark_shows_its_audio(client, stored):
+    await stored([_bookmark("a")])
     job = await _completed("a", "article-a-123.mp3")
     item = (await client.get("/api/bookmarks")).json()["items"][0]
     assert item["audio"]["jobId"] == job["id"]
     assert item["audio"]["url"] == "/api/audio/article-a-123.mp3"
 
 
-async def test_bookmark_shows_a_running_job_but_not_a_finished_one(client, readeck_page):
-    readeck_page([_bookmark("a"), _bookmark("b")])
+async def test_bookmark_shows_a_running_job_but_not_a_finished_one(client, stored):
+    await stored([_bookmark("a"), _bookmark("b")])
     await models.create_job("a", "A", "http://x", "edge-tts", "v")
     await _completed("b", "b.mp3")
     items = {i["id"]: i for i in (await client.get("/api/bookmarks")).json()["items"]}
@@ -87,27 +81,66 @@ async def test_bookmark_shows_a_running_job_but_not_a_finished_one(client, reade
     assert items["b"]["job"] is None
 
 
-async def test_javascript_bookmark_url_is_not_passed_through(client, readeck_page):
-    readeck_page([_bookmark("a", url="javascript:alert(1)")])
+async def test_javascript_bookmark_url_is_not_passed_through(client, stored):
+    await stored([_bookmark("a", url="javascript:alert(1)")])
     item = (await client.get("/api/bookmarks")).json()["items"][0]
     assert item["url"] == ""
 
 
-async def test_search_and_added_range_go_to_readeck(client, readeck_page):
-    mock = readeck_page([])
-    await client.get(
-        "/api/bookmarks",
-        params={"search": "go", "addedFrom": "2026-01-01", "addedTo": "2026-01-31", "page": 2},
+async def test_search_matches_title_site_and_authors(client, stored):
+    await stored(
+        [
+            _bookmark("a", title="Go generics"),
+            _bookmark("b", site_name="The Go Blog"),
+            _bookmark("c", authors=["Rob Pike"]),
+            _bookmark("d", title="Rust"),
+            _bookmark("e", title="100% pure"),
+        ]
     )
-    kwargs = mock.call_args.kwargs
-    assert kwargs["search"] == "go"
-    assert kwargs["range_start"] == "2026-01-01T00:00:00Z"
-    assert kwargs["range_end"] == "2026-01-31T23:59:59Z"
-    assert kwargs["offset"] == 30
+
+    async def ids(search):
+        resp = await client.get("/api/bookmarks", params={"search": search})
+        return [i["id"] for i in resp.json()["items"]]
+
+    assert await ids("go") == ["a", "b"]
+    assert await ids("pike") == ["c"]
+    # LIKE wildcards in the search are literal.
+    assert await ids("%") == ["e"]
 
 
-async def test_filter_by_audio(client, readeck_page):
-    readeck_page([_bookmark("a"), _bookmark("b")])
+async def test_filter_by_added_range_is_inclusive(client, stored):
+    await stored(
+        [
+            _bookmark("before", created="2025-12-31T23:59:59Z"),
+            _bookmark("first", created="2026-01-01T00:00:00Z"),
+            _bookmark("last", created="2026-01-31T23:59:59Z"),
+            _bookmark("after", created="2026-02-01T00:00:00Z"),
+        ]
+    )
+    resp = await client.get(
+        "/api/bookmarks", params={"addedFrom": "2026-01-01", "addedTo": "2026-01-31"}
+    )
+    assert [i["id"] for i in resp.json()["items"]] == ["last", "first"]
+
+
+async def test_bookmarks_are_newest_first_and_paginate(client, stored):
+    await stored(
+        [
+            _bookmark(f"b{i:02d}", created=f"2026-01-{i % 28 + 1:02d}T{i % 24:02d}:00:00Z")
+            for i in range(35)
+        ]
+    )
+    page1 = (await client.get("/api/bookmarks")).json()
+    page2 = (await client.get("/api/bookmarks", params={"page": 2})).json()
+    assert page1["total"] == 35
+    assert page1["totalPages"] == 2
+    added = [i["added"] for i in page1["items"] + page2["items"]]
+    assert added == sorted(added, reverse=True)
+    assert len({i["id"] for i in page1["items"] + page2["items"]}) == 35
+
+
+async def test_filter_by_audio(client, stored):
+    await stored([_bookmark("a"), _bookmark("b")])
     await _completed("a", "a.mp3")
 
     with_audio = (await client.get("/api/bookmarks", params={"audio": "with"})).json()
@@ -117,8 +150,8 @@ async def test_filter_by_audio(client, readeck_page):
     assert without["total"] == 1
 
 
-async def test_filter_by_auto_generation_exclusion(client, readeck_page):
-    readeck_page([_bookmark("a"), _bookmark("b")])
+async def test_filter_by_auto_generation_exclusion(client, stored):
+    await stored([_bookmark("a"), _bookmark("b")])
     await models.set_auto_excluded(["b"], True)
 
     excluded = (await client.get("/api/bookmarks", params={"autoGeneration": "excluded"})).json()
@@ -128,8 +161,8 @@ async def test_filter_by_auto_generation_exclusion(client, readeck_page):
     assert [i["id"] for i in included["items"]] == ["a"]
 
 
-async def test_filter_by_published_range_is_inclusive_and_drops_unknown(client, readeck_page):
-    readeck_page(
+async def test_filter_by_published_range_is_inclusive_and_drops_unknown(client, stored):
+    await stored(
         [
             _bookmark("old", published="2025-01-01T08:00:00Z"),
             _bookmark("edge", published="2025-06-30T22:00:00Z"),
@@ -146,30 +179,30 @@ async def test_filter_by_published_range_is_inclusive_and_drops_unknown(client, 
     assert [i["id"] for i in only_start.json()["items"]] == ["edge", "new"]
 
 
-async def test_local_filters_paginate_locally(client, readeck_page):
-    readeck_page([_bookmark(f"b{i}") for i in range(35)])
+async def test_filters_combine_with_pagination(client, stored):
+    await stored([_bookmark(f"b{i:02d}") for i in range(35)])
+    await _completed("b00", "a.mp3")
     page2 = (await client.get("/api/bookmarks", params={"audio": "without", "page": 2})).json()
-    assert page2["total"] == 35
+    assert page2["total"] == 34
     assert page2["totalPages"] == 2
-    assert [i["id"] for i in page2["items"]] == [f"b{i}" for i in range(30, 35)]
+    assert [i["id"] for i in page2["items"]] == [f"b{i:02d}" for i in range(31, 35)]
 
 
-async def test_invalid_filter_is_a_problem_response(client, readeck_page):
-    readeck_page([])
+async def test_invalid_filter_is_a_problem_response(client, stored):
+    await stored([])
     resp = await client.get("/api/bookmarks", params={"audio": "maybe"})
     assert resp.status_code == 422
     assert resp.headers["content-type"] == "application/problem+json"
     assert "audio" in resp.json()["errors"]
 
 
-async def test_readeck_outage_is_a_502_problem(client, monkeypatch):
-    monkeypatch.setattr(
-        "app.readeck.list_bookmarks",
-        AsyncMock(side_effect=readeck.ReadeckError("Readeck did not respond in time.")),
+async def test_unloaded_and_deleted_bookmarks_are_hidden(client, stored):
+    await stored(
+        [_bookmark("ok"), _bookmark("loading", loaded=False), _bookmark("bin", is_deleted=True)]
     )
-    resp = await client.get("/api/bookmarks")
-    assert resp.status_code == 502
-    assert resp.json()["detail"] == "Readeck did not respond in time."
+    body = (await client.get("/api/bookmarks")).json()
+    assert [i["id"] for i in body["items"]] == ["ok"]
+    assert body["total"] == 1
 
 
 async def test_delete_bookmark_audio(client, audio_dir):
@@ -419,6 +452,39 @@ async def test_update_settings(client):
     assert again["since"] == "2026-01-01"
 
 
+async def test_sync_settings_default_and_update(client, stored):
+    await stored([_bookmark("a")])
+    body = (await client.get("/api/settings")).json()["sync"]
+    assert body["cron"] == "*/15 * * * *"
+    assert body["bookmarkCount"] == 1
+    assert body["running"] is False
+    assert body["lastRun"] is None
+    assert body["nextRun"] is not None
+
+    resp = await client.put("/api/settings", json={"sync": {"cron": "0 */2 * * *"}})
+    assert resp.json()["sync"]["cron"] == "0 */2 * * *"
+    # The other section is left as it was.
+    assert resp.json()["autoGeneration"]["enabled"] is False
+
+
+async def test_sync_now_runs_in_the_background(client, monkeypatch):
+    started = asyncio.Event()
+
+    async def fake_run():
+        started.set()
+
+    monkeypatch.setattr("app.sync._run_logged", fake_run)
+    resp = await client.post("/api/sync/run")
+    assert resp.status_code == 202
+    await asyncio.wait_for(started.wait(), 1)
+
+
+async def test_update_settings_rejects_a_bad_sync_cron(client):
+    resp = await client.put("/api/settings", json={"sync": {"cron": "nope"}})
+    assert resp.status_code == 422
+    assert "sync.cron" in resp.json()["errors"]
+
+
 async def test_update_settings_rejects_a_bad_cron(client):
     resp = await client.put(
         "/api/settings", json={"autoGeneration": {"enabled": True, "cron": "every hour"}}
@@ -427,10 +493,8 @@ async def test_update_settings_rejects_a_bad_cron(client):
     assert "autoGeneration.cron" in resp.json()["errors"]
 
 
-async def test_run_auto_generation_now(client, monkeypatch):
-    monkeypatch.setattr(
-        "app.readeck.list_all_bookmarks", AsyncMock(return_value=[_bookmark("a"), _bookmark("b")])
-    )
+async def test_run_auto_generation_now(client, stored, monkeypatch):
+    await stored([_bookmark("a"), _bookmark("b")])
     monkeypatch.setattr("app.readeck.get_bookmarks", AsyncMock(return_value={}))
     resp = await client.post("/api/auto-generation/run")
     assert resp.json() == {"queued": 2, "skipped": 0}

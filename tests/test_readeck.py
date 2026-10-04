@@ -18,24 +18,18 @@ async def test_list_bookmarks():
     )
     result = await readeck.list_bookmarks(limit=10, offset=0)
     assert result["total"] == 1
-    assert result["total_pages"] == 1
-    assert result["current_page"] == 1
     assert result["items"][0]["id"] == "abc"
 
 
 @respx.mock
-async def test_list_bookmarks_with_search():
+async def test_list_bookmarks_by_id():
     route = respx.get("http://readeck.test/api/bookmarks").mock(
-        return_value=httpx.Response(
-            200,
-            json=[],
-            headers={"Total-Count": "0", "Total-Pages": "1", "Current-Page": "1"},
-        )
+        return_value=httpx.Response(200, json=[], headers={"Total-Count": "0"})
     )
-    result = await readeck.list_bookmarks(limit=10, offset=0, search="python")
-    assert result["total"] == 0
-    # Verify the search param was forwarded
-    assert "search=python" in str(route.calls[0].request.url)
+    await readeck.list_bookmarks(limit=2, ids=["a", "b"])
+    params = route.calls[0].request.url.params
+    assert params.get_list("id") == ["a", "b"]
+    assert params["limit"] == "2"
 
 
 @respx.mock
@@ -152,19 +146,94 @@ async def test_close_client_is_safe_when_none_was_created():
 
 
 @respx.mock
-async def test_list_bookmarks_forwards_filters():
-    route = respx.get("http://readeck.test/api/bookmarks").mock(
-        return_value=httpx.Response(200, json=[], headers={"Total-Count": "0"})
+async def test_fetch_bookmarks_asks_for_100_ids_at_a_time():
+    def page(request):
+        ids = request.url.params.get_list("id")
+        assert len(ids) <= 100
+        # Readeck leaves out ids it no longer has.
+        return httpx.Response(200, json=[{"id": i} for i in ids if i != "gone"])
+
+    route = respx.get("http://readeck.test/api/bookmarks").mock(side_effect=page)
+    ids = [f"b{i}" for i in range(250)] + ["gone"]
+    items = await readeck.fetch_bookmarks(ids)
+    assert sorted(b["id"] for b in items) == sorted(ids[:-1])
+    assert route.call_count == 3
+
+
+async def test_fetch_bookmarks_with_no_ids():
+    assert await readeck.fetch_bookmarks([]) == []
+
+
+@respx.mock
+async def test_sync_list_maps_ids_to_update_times():
+    respx.get("http://readeck.test/api/bookmarks/sync").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": "a", "time": "2026-01-02T10:00:00.5Z", "type": "update"},
+                {"id": "b", "time": "2026-01-01T10:00:00Z", "type": "update"},
+                {"id": "c", "time": "2026-01-03T00:00:00Z", "type": "delete"},
+            ],
+        )
     )
-    await readeck.list_bookmarks(
-        range_start="2026-01-01T00:00:00Z", range_end="2026-02-01T23:59:59Z", types=("article",)
+    assert await readeck.sync_list() == {
+        "a": "2026-01-02T10:00:00.5Z",
+        "b": "2026-01-01T10:00:00Z",
+    }
+
+
+@respx.mock
+async def test_sync_list_falls_back_to_the_full_list_on_an_older_readeck():
+    respx.get("http://readeck.test/api/bookmarks/sync").mock(return_value=httpx.Response(404))
+    respx.get("http://readeck.test/api/bookmarks").mock(
+        return_value=httpx.Response(
+            200, json=[{"id": "a", "updated": "2026-01-01T00:00:00Z"}], headers={"Total-Count": "1"}
+        )
     )
-    params = route.calls[0].request.url.params
-    assert params["range_start"] == "2026-01-01T00:00:00Z"
-    assert params["range_end"] == "2026-02-01T23:59:59Z"
-    assert params["type"] == "article"
-    assert params["sort"] == "-created"
-    assert "search" not in params
+    assert await readeck.sync_list() == {"a": "2026-01-01T00:00:00Z"}
+
+
+@respx.mock
+async def test_sync_list_failure_raises_a_readeck_error():
+    respx.get("http://readeck.test/api/bookmarks/sync").mock(return_value=httpx.Response(500))
+    with pytest.raises(readeck.ReadeckError, match="HTTP 500"):
+        await readeck.sync_list()
+
+
+@respx.mock
+async def test_a_deleted_bookmark_raises_bookmark_gone():
+    respx.get("http://readeck.test/api/bookmarks/abc").mock(return_value=httpx.Response(404))
+    with pytest.raises(readeck.BookmarkGone):
+        await readeck.get_bookmark("abc")
+
+
+@respx.mock
+async def test_article_text_of_a_deleted_bookmark_raises_bookmark_gone():
+    respx.get("http://readeck.test/api/bookmarks/abc/article.md").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get("http://readeck.test/api/bookmarks/abc/article").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get("http://readeck.test/api/bookmarks/abc").mock(return_value=httpx.Response(404))
+    with pytest.raises(readeck.BookmarkGone):
+        await readeck.get_article_text("abc")
+
+
+@respx.mock
+async def test_a_bookmark_with_no_article_is_not_mistaken_for_a_deleted_one():
+    respx.get("http://readeck.test/api/bookmarks/abc/article.md").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get("http://readeck.test/api/bookmarks/abc/article").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get("http://readeck.test/api/bookmarks/abc").mock(
+        return_value=httpx.Response(200, json={"id": "abc", "type": "photo"})
+    )
+    with pytest.raises(readeck.ReadeckError, match="no article text") as raised:
+        await readeck.get_article_text("abc")
+    assert not isinstance(raised.value, readeck.BookmarkGone)
 
 
 @respx.mock
@@ -176,7 +245,7 @@ async def test_list_all_bookmarks_reads_every_page():
         return httpx.Response(200, json=items, headers={"Total-Count": "250"})
 
     route = respx.get("http://readeck.test/api/bookmarks").mock(side_effect=page)
-    items = await readeck.list_all_bookmarks(search="x")
+    items = await readeck.list_all_bookmarks()
     assert [b["id"] for b in items] == [f"b{i}" for i in range(250)]
     assert route.call_count == 3
 

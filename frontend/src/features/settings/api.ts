@@ -5,4 +5,5 @@ export const settingsApi = {
   get: () => api.get<Settings>("/settings"),
   put: (body: SettingsUpdate) => api.put<Settings>("/settings", body),
   runAutoGeneration: () => api.post<QueueResult>("/auto-generation/run"),
+  runSync: () => api.post<Settings>("/sync/run"),
 };

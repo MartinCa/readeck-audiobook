@@ -14,3 +14,4 @@ export type CountResult = Schemas["CountResult"];
 export type Settings = Schemas["Settings"];
 export type SettingsUpdate = Schemas["SettingsUpdate"];
 export type AutoGenerationStatus = Schemas["AutoGenerationStatus"];
+export type SyncStatus = Schemas["SyncStatus"];

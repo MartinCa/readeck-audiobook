@@ -9,7 +9,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from app import models, tts
+from app import models, sync, tts
 
 
 @pytest.fixture
@@ -54,3 +54,14 @@ async def client(tmp_path, monkeypatch, audio_dir):
         follow_redirects=True,
     ) as c:
         yield c
+
+
+@pytest.fixture
+def store_bookmarks():
+    """Put Readeck bookmarks straight into the local copy, as a sync would."""
+
+    async def store(items: list[dict], version: str = "v1") -> None:
+        now = "2026-06-01T00:00:00+00:00"
+        await models.upsert_bookmarks([sync.to_row(bm, version, now) for bm in items])
+
+    return store
