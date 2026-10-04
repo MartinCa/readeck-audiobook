@@ -46,6 +46,19 @@ def _utc(value: str | None) -> datetime | None:
 JobStatusName = Literal["pending", "processing", "completed", "failed"]
 
 
+class JobProgress(ApiModel):
+    """Text chunks synthesized so far out of the article's total."""
+
+    done: int
+    total: int
+
+    @classmethod
+    def from_row(cls, row: dict) -> "JobProgress | None":
+        if row.get("status") != "processing" or row.get("progress_total") is None:
+            return None
+        return cls(done=row["progress_done"] or 0, total=row["progress_total"])
+
+
 class Job(ApiModel):
     id: str
     bookmark_id: str
@@ -56,6 +69,7 @@ class Job(ApiModel):
     voice: str
     lang: str
     error_msg: str | None
+    progress: JobProgress | None
     created_at: datetime
     updated_at: datetime | None
 
@@ -71,6 +85,7 @@ class Job(ApiModel):
             voice=row["voice"] or "",
             lang=row["lang"] or "",
             error_msg=row["error_msg"],
+            progress=JobProgress.from_row(row),
             created_at=_utc(row["created_at"]),
             updated_at=_utc(row["updated_at"]),
         )
@@ -108,6 +123,7 @@ class BookmarkJob(ApiModel):
     id: str
     status: JobStatusName
     error_msg: str | None
+    progress: JobProgress | None
 
 
 class Bookmark(ApiModel):
@@ -143,7 +159,12 @@ class Bookmark(ApiModel):
             added=item["created"],
             audio=Audio.from_row(item["audio"]) if item.get("audio") else None,
             job=(
-                BookmarkJob(id=job["id"], status=job["status"], error_msg=job["error_msg"])
+                BookmarkJob(
+                    id=job["id"],
+                    status=job["status"],
+                    error_msg=job["error_msg"],
+                    progress=JobProgress.from_row(job),
+                )
                 if job
                 else None
             ),

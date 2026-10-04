@@ -324,6 +324,16 @@
             "title": "Id",
             "type": "string"
           },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "enum": [
               "pending",
@@ -338,7 +348,8 @@
         "required": [
           "id",
           "status",
-          "errorMsg"
+          "errorMsg",
+          "progress"
         ],
         "title": "BookmarkJob",
         "type": "object"
@@ -465,6 +476,16 @@
             "title": "Lang",
             "type": "string"
           },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "enum": [
               "pending",
@@ -506,6 +527,7 @@
           "voice",
           "lang",
           "errorMsg",
+          "progress",
           "createdAt",
           "updatedAt"
         ],
@@ -563,6 +585,25 @@
           "totalPages"
         ],
         "title": "JobPage",
+        "type": "object"
+      },
+      "JobProgress": {
+        "description": "Text chunks synthesized so far out of the article's total.",
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "done",
+          "total"
+        ],
+        "title": "JobProgress",
         "type": "object"
       },
       "QueueResult": {

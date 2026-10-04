@@ -1,21 +1,21 @@
 import { Loader2Icon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { jobStatusLabel } from "@/lib/format";
 import type { Job } from "@/lib/types";
 
-const labels: Record<Job["status"], string> = {
-  pending: "Queued",
-  processing: "Generating audio",
-  completed: "Audio ready",
-  failed: "Failed",
-};
-
-export function JobStatusBadge({ status }: { status: Job["status"] }) {
+export function JobStatusBadge({
+  status,
+  progress,
+}: {
+  status: Job["status"];
+  progress?: Job["progress"];
+}) {
   return (
-    <Badge variant={status === "failed" ? "destructive" : "secondary"}>
+    <Badge variant={status === "failed" ? "destructive" : "secondary"} className="tabular-nums">
       {status === "processing" && (
         <Loader2Icon className="animate-spin motion-reduce:animate-none" aria-hidden />
       )}
-      {labels[status]}
+      {jobStatusLabel(status, progress)}
     </Badge>
   );
 }

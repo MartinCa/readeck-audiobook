@@ -258,6 +258,19 @@ async def test_jobs_list_leaves_out_completed(client):
     assert set(ids) == {pending["id"], failed["id"]}
 
 
+async def test_running_job_reports_its_progress(client, stored):
+    await stored([_bookmark("a")])
+    job = await models.create_job("a", "A", "http://x", "edge-tts", "v")
+    assert (await client.get("/api/jobs")).json()["items"][0]["progress"] is None
+
+    await models.claim_next_pending_job(2)
+    await models.set_job_progress(job["id"], 3, 8)
+    item = (await client.get("/api/jobs")).json()["items"][0]
+    assert item["progress"] == {"done": 3, "total": 8}
+    bookmark = (await client.get("/api/bookmarks")).json()["items"][0]
+    assert bookmark["job"]["progress"] == {"done": 3, "total": 8}
+
+
 async def test_get_job(client):
     job = await models.create_job("bm1", "Test", "http://example.com", "edge-tts", "v")
     resp = await client.get(f"/api/jobs/{job['id']}")

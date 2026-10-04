@@ -49,7 +49,7 @@ export function JobCard({ job, selected, onSelectedChange }: JobCardProps) {
             <h2 id={titleId} className="min-w-0 flex-1 font-medium break-words">
               {job.bookmarkTitle}
             </h2>
-            <JobStatusBadge status={job.status} />
+            <JobStatusBadge status={job.status} progress={job.progress} />
           </div>
           <p className="text-muted-foreground text-xs break-words">
             {engine} · queued{" "}

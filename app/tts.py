@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import unicodedata
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app import config
@@ -338,6 +339,22 @@ async def _with_retries(factory, description: str):
     ) from last_error
 
 
+# ── Progress ───────────────────────────────────────────────────────────────────
+
+# Called with (chunks done, chunks total) as synthesis moves through an article.
+ProgressCallback = Callable[[int, int], Awaitable[None]]
+
+
+async def _report_progress(on_progress: ProgressCallback | None, done: int, total: int) -> None:
+    """Pass progress on; a failure to record it must never fail the job."""
+    if on_progress is None:
+        return
+    try:
+        await on_progress(done, total)
+    except Exception as exc:
+        logger.warning("Could not record progress %d/%d: %s", done, total, exc)
+
+
 # ── Backends ───────────────────────────────────────────────────────────────────
 
 
@@ -354,11 +371,14 @@ async def _edge_tts_chunk(text: str, voice: str) -> bytes:
     return bytes(buffer)
 
 
-async def synthesize_edge_tts(text: str, output_path: Path, voice: str):
+async def synthesize_edge_tts(
+    text: str, output_path: Path, voice: str, on_progress: ProgressCallback | None = None
+):
     chunks = _split_text(text, config.TTS_CHUNK_CHARS)
     if not chunks:
         raise ValueError("No readable text to synthesize")
 
+    await _report_progress(on_progress, 0, len(chunks))
     with output_path.open("wb") as fh:
         for index, chunk in enumerate(chunks, 1):
 
@@ -366,6 +386,7 @@ async def synthesize_edge_tts(text: str, output_path: Path, voice: str):
                 return await _edge_tts_chunk(chunk, voice)
 
             fh.write(await _with_retries(synthesize, f"edge-tts chunk {index}/{len(chunks)}"))
+            await _report_progress(on_progress, index, len(chunks))
 
 
 _kokoro_tts = None
@@ -558,7 +579,9 @@ def release_kokoro() -> bool:
     return True
 
 
-async def synthesize_kokoro(text: str, output_path: Path, voice: str = ""):
+async def synthesize_kokoro(
+    text: str, output_path: Path, voice: str = "", on_progress: ProgressCallback | None = None
+):
     """Synthesize speech with the local Kokoro-82M model via sherpa-onnx."""
     import subprocess
     import tempfile
@@ -578,6 +601,17 @@ async def synthesize_kokoro(text: str, output_path: Path, voice: str = ""):
     chunks = _split_text(text, config.TTS_CHUNK_CHARS)
     if not chunks:
         raise ValueError("No readable text to synthesize")
+
+    await _report_progress(on_progress, 0, len(chunks))
+    loop = asyncio.get_running_loop()
+
+    def _report_from_thread(done: int) -> None:
+        # Fire and forget: synthesis need not wait on a database write, and
+        # set_job_progress ignores a write that arrives out of order.
+        if on_progress is None:
+            return
+        with contextlib.suppress(RuntimeError):  # the loop closed under us at shutdown
+            asyncio.run_coroutine_threadsafe(_report_progress(on_progress, done, len(chunks)), loop)
 
     def _run_sync():
         # Borrowed for the whole article rather than per chunk: the idle unload
@@ -617,6 +651,7 @@ async def synthesize_kokoro(text: str, output_path: Path, voice: str = ""):
                             )
                         writer.write(audio.samples)
                         del audio
+                        _report_from_thread(index)
                 finally:
                     if writer is not None:
                         writer.close()
@@ -684,6 +719,7 @@ async def generate_audio(
     engine: str = "",
     voice: str = "",
     lang: str = "",
+    on_progress: ProgressCallback | None = None,
 ) -> Path:
     """Generate audio for a job and return the path to the finished MP3."""
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -703,9 +739,9 @@ async def generate_audio(
     partial_path = output_path.with_name(output_path.name + ".part")
     try:
         if engine == ENGINE_KOKORO:
-            await synthesize_kokoro(cleaned, partial_path, voice)
+            await synthesize_kokoro(cleaned, partial_path, voice, on_progress)
         else:
-            await synthesize_edge_tts(cleaned, partial_path, voice)
+            await synthesize_edge_tts(cleaned, partial_path, voice, on_progress)
 
         if not partial_path.exists() or partial_path.stat().st_size == 0:
             raise RuntimeError(f"{engine} produced an empty audio file")

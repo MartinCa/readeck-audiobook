@@ -337,6 +337,7 @@ export interface components {
       errorMsg: string | null;
       /** Id */
       id: string;
+      progress: components["schemas"]["JobProgress"] | null;
       /**
        * Status
        * @enum {string}
@@ -395,6 +396,7 @@ export interface components {
       id: string;
       /** Lang */
       lang: string;
+      progress: components["schemas"]["JobProgress"] | null;
       /**
        * Status
        * @enum {string}
@@ -424,6 +426,16 @@ export interface components {
       total: number;
       /** Totalpages */
       totalPages: number;
+    };
+    /**
+     * JobProgress
+     * @description Text chunks synthesized so far out of the article's total.
+     */
+    JobProgress: {
+      /** Done */
+      done: number;
+      /** Total */
+      total: number;
     };
     /** QueueResult */
     QueueResult: {
