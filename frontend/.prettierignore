@@ -1,0 +1,7 @@
+pnpm-lock.yaml
+
+# Generated / vendored output — regenerate rather than hand-format.
+src/routeTree.gen.ts
+
+# Prose is hand-wrapped and tables hand-aligned to stay readable in diffs.
+*.md
