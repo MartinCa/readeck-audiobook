@@ -1,10 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { settingsApi } from "@/features/settings/api";
+import type { Settings } from "@/lib/types";
 
 const settingsKey = ["settings"] as const;
 
 export function useSettings() {
-  return useQuery({ queryKey: settingsKey, queryFn: settingsApi.get });
+  const queryClient = useQueryClient();
+  return useQuery({
+    queryKey: settingsKey,
+    queryFn: async () => {
+      const wasSyncing = queryClient.getQueryData<Settings>(settingsKey)?.sync.running;
+      const settings = await settingsApi.get();
+      // A sync that just finished may have added or removed bookmarks.
+      if (wasSyncing && !settings.sync.running) {
+        void queryClient.invalidateQueries({ queryKey: ["bookmarks"] });
+      }
+      return settings;
+    },
+    // Follow a running sync until it finishes.
+    refetchInterval: (query) => (query.state.data?.sync.running ? 2000 : false),
+  });
 }
 
 export function useSaveSettings() {
@@ -25,5 +40,13 @@ export function useRunAutoGeneration() {
         queryClient.invalidateQueries({ queryKey: ["jobs"] }),
         queryClient.invalidateQueries({ queryKey: ["bookmarks"] }),
       ]),
+  });
+}
+
+export function useRunSync() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: settingsApi.runSync,
+    onSuccess: (data) => queryClient.setQueryData(settingsKey, data),
   });
 }

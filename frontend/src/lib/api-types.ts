@@ -197,6 +197,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/sync/run": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Run Sync
+     * @description Start a sync with Readeck in the background; poll the settings for its result.
+     */
+    post: operations["run_sync_api_sync_run_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/health": {
     parameters: {
       query?: never;
@@ -415,10 +435,41 @@ export interface components {
     /** Settings */
     Settings: {
       autoGeneration: components["schemas"]["AutoGenerationStatus"];
+      sync: components["schemas"]["SyncStatus"];
     };
-    /** SettingsUpdate */
+    /**
+     * SettingsUpdate
+     * @description Either section, or both; a section left out is unchanged.
+     */
     SettingsUpdate: {
-      autoGeneration: components["schemas"]["AutoGenerationSettings"];
+      autoGeneration?: components["schemas"]["AutoGenerationSettings"] | null;
+      sync?: components["schemas"]["SyncSettings"] | null;
+    };
+    /** SyncSettings */
+    SyncSettings: {
+      /** Cron */
+      cron: string;
+    };
+    /** SyncStatus */
+    SyncStatus: {
+      /** Added */
+      added: number;
+      /** Bookmarkcount */
+      bookmarkCount: number;
+      /** Cron */
+      cron: string;
+      /** Lasterror */
+      lastError: string | null;
+      /** Lastrun */
+      lastRun: string | null;
+      /** Nextrun */
+      nextRun: string | null;
+      /** Removed */
+      removed: number;
+      /** Running */
+      running: boolean;
+      /** Updated */
+      updated: number;
     };
     /** ValidationError */
     ValidationError: {
@@ -854,6 +905,26 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  run_sync_api_sync_run_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Settings"];
         };
       };
     };

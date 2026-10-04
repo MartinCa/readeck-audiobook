@@ -5,7 +5,7 @@ import asyncio
 import pytest
 import pytest_asyncio
 
-from app import jobs, models, tts
+from app import jobs, models, readeck, tts
 
 
 @pytest.fixture(autouse=True)
@@ -304,3 +304,35 @@ class TestQueueBookmarks:
         results = await asyncio.gather(jobs.queue_bookmarks(["bm1"]), jobs.queue_bookmarks(["bm1"]))
         assert sorted(results) == [(0, 1), (1, 0)]
         assert len(await models.list_job_ids()) == 1
+
+
+class TestBookmarkGoneFromReadeck:
+    async def test_a_404_drops_the_job_and_the_bookmark(self, monkeypatch, store_bookmarks):
+        await store_bookmarks([{"id": "bm1", "created": "2026-01-01T00:00:00Z"}])
+        await _queue()
+        claimed = await models.claim_next_pending_job(2)
+
+        async def gone(_):
+            raise readeck.BookmarkGone("gone")
+
+        monkeypatch.setattr(jobs.readeck, "get_article_text", gone)
+        await jobs._process_job(claimed)
+        assert await models.get_job(claimed["id"]) is None
+        assert await models.get_bookmark_rows(["bm1"]) == {}
+
+    async def test_audio_finished_after_a_sync_removed_the_bookmark_is_deleted(
+        self, monkeypatch, audio_dir
+    ):
+        await _queue()
+        claimed = await models.claim_next_pending_job(2)
+        monkeypatch.setattr(jobs.readeck, "get_article_text", _returns("Some words."))
+
+        async def generate_while_synced_away(job_id, *args, **kwargs):
+            await models.delete_bookmarks(["bm1"])
+            path = audio_dir / "late.mp3"
+            path.write_bytes(b"x")
+            return path
+
+        monkeypatch.setattr(jobs.tts, "generate_audio", generate_while_synced_away)
+        await jobs._process_job(claimed)
+        assert not (audio_dir / "late.mp3").exists()

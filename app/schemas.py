@@ -194,12 +194,31 @@ class AutoGenerationStatus(AutoGenerationSettings):
     last_error: str | None
 
 
+class SyncSettings(ApiModel):
+    cron: str
+
+
+class SyncStatus(SyncSettings):
+    running: bool
+    bookmark_count: int
+    next_run: datetime | None
+    last_run: datetime | None
+    last_error: str | None
+    added: int
+    updated: int
+    removed: int
+
+
 class Settings(ApiModel):
+    sync: SyncStatus
     auto_generation: AutoGenerationStatus
 
 
 class SettingsUpdate(ApiModel):
-    auto_generation: AutoGenerationSettings
+    """Either section, or both; a section left out is unchanged."""
+
+    sync: SyncSettings | None = None
+    auto_generation: AutoGenerationSettings | None = None
 
 
 class Health(ApiModel):

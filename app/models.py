@@ -48,6 +48,28 @@ CREATE TABLE IF NOT EXISTS queued_bookmarks (
     first_queued_at TEXT NOT NULL
 );
 
+-- The local copy of the Readeck library, kept current by app.sync. Times are
+-- UTC ISO 8601 with seconds precision so they compare correctly as text;
+-- `readeck_updated` is Readeck's own value, compared verbatim to spot changes.
+CREATE TABLE IF NOT EXISTS bookmarks (
+    id              TEXT PRIMARY KEY,
+    title           TEXT NOT NULL DEFAULT '',
+    url             TEXT NOT NULL DEFAULT '',
+    site_name       TEXT NOT NULL DEFAULT '',
+    authors         TEXT NOT NULL DEFAULT '[]',
+    lang            TEXT NOT NULL DEFAULT '',
+    type            TEXT NOT NULL DEFAULT '',
+    reading_time    INTEGER,
+    description     TEXT NOT NULL DEFAULT '',
+    published       TEXT,
+    created         TEXT NOT NULL,
+    loaded          INTEGER NOT NULL DEFAULT 1,
+    is_deleted      INTEGER NOT NULL DEFAULT 0,
+    readeck_updated TEXT NOT NULL DEFAULT '',
+    synced_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_created ON bookmarks(created DESC);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -473,6 +495,174 @@ async def queued_bookmark_ids() -> set[str]:
     async with _connect() as db:
         async with db.execute("SELECT bookmark_id FROM queued_bookmarks") as cur:
             return {row[0] for row in await cur.fetchall()}
+
+
+# ── Bookmarks (the local copy of Readeck) ──────────────────────────────────────
+
+_BOOKMARK_COLUMNS = (
+    "id",
+    "title",
+    "url",
+    "site_name",
+    "authors",
+    "lang",
+    "type",
+    "reading_time",
+    "description",
+    "published",
+    "created",
+    "loaded",
+    "is_deleted",
+    "readeck_updated",
+    "synced_at",
+)
+
+# A bookmark worth showing: Readeck has finished fetching it and it is not on
+# its way to the bin.
+_VISIBLE = "b.loaded = 1 AND b.is_deleted = 0"
+_HAS_AUDIO = (
+    "EXISTS (SELECT 1 FROM jobs j WHERE j.bookmark_id = b.id AND j.status = 'completed' "
+    "AND j.audio_path IS NOT NULL AND j.audio_path != '')"
+)
+_IS_EXCLUDED = "EXISTS (SELECT 1 FROM auto_excluded x WHERE x.bookmark_id = b.id)"
+
+
+async def bookmark_versions() -> dict[str, str]:
+    """Readeck's last-updated value for every stored bookmark, by id."""
+    async with _connect() as db:
+        async with db.execute("SELECT id, readeck_updated FROM bookmarks") as cur:
+            return {row[0]: row[1] for row in await cur.fetchall()}
+
+
+async def upsert_bookmarks(rows: list[dict]) -> None:
+    """Insert or replace bookmarks; each row carries every column."""
+    if not rows:
+        return
+    columns = ", ".join(_BOOKMARK_COLUMNS)
+    placeholders = ", ".join("?" * len(_BOOKMARK_COLUMNS))
+    async with _connect() as db:
+        await db.execute("BEGIN")
+        await db.executemany(
+            f"INSERT OR REPLACE INTO bookmarks ({columns}) VALUES ({placeholders})",
+            [tuple(row[c] for c in _BOOKMARK_COLUMNS) for row in rows],
+        )
+        await db.execute("COMMIT")
+
+
+async def delete_bookmarks(bookmark_ids: list[str]) -> list[dict]:
+    """Forget bookmarks that are gone from Readeck, with everything kept for them.
+
+    Removes the bookmark rows, their jobs, exclusions and queue history; returns
+    the deleted job rows so the caller can remove their audio files.
+    """
+    deleted_jobs: list[dict] = []
+    async with _connect() as db:
+        for chunk in _chunks(bookmark_ids):
+            placeholders = ", ".join("?" * len(chunk))
+            params = tuple(chunk)
+            async with db.execute(
+                f"DELETE FROM jobs WHERE bookmark_id IN ({placeholders}) RETURNING *", params
+            ) as cur:
+                deleted_jobs.extend(dict(r) for r in await cur.fetchall())
+            for table, column in (
+                ("bookmarks", "id"),
+                ("auto_excluded", "bookmark_id"),
+                ("queued_bookmarks", "bookmark_id"),
+            ):
+                await db.execute(f"DELETE FROM {table} WHERE {column} IN ({placeholders})", params)
+    return deleted_jobs
+
+
+async def count_bookmarks() -> int:
+    async with _connect() as db:
+        async with db.execute(f"SELECT COUNT(*) FROM bookmarks b WHERE {_VISIBLE}") as cur:
+            return (await cur.fetchone())[0]
+
+
+async def get_bookmark_rows(bookmark_ids: list[str]) -> dict[str, dict]:
+    rows: dict[str, dict] = {}
+    async with _connect() as db:
+        for chunk in _chunks(bookmark_ids):
+            placeholders = ", ".join("?" * len(chunk))
+            async with db.execute(
+                f"SELECT * FROM bookmarks WHERE id IN ({placeholders})", tuple(chunk)
+            ) as cur:
+                rows.update({row["id"]: dict(row) for row in await cur.fetchall()})
+    return rows
+
+
+def _like(text: str) -> str:
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+async def query_bookmarks(
+    *,
+    search: str = "",
+    created_from: str | None = None,
+    created_to: str | None = None,
+    published_from: str | None = None,
+    published_to: str | None = None,
+    has_audio: bool | None = None,
+    excluded: bool | None = None,
+    limit: int = 30,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """A page of visible bookmarks, newest first, and the total that match.
+
+    `created_*` compare full timestamps; `published_*` compare the UTC day
+    (YYYY-MM-DD) and leave out bookmarks with no publication date.
+    """
+    where = [_VISIBLE]
+    params: list = []
+    if search:
+        pattern = _like(search)
+        columns = ("title", "site_name", "authors", "description", "url")
+        where.append("(" + " OR ".join(f"b.{c} LIKE ? ESCAPE '\\'" for c in columns) + ")")
+        params += [pattern] * len(columns)
+    if created_from:
+        where.append("b.created >= ?")
+        params.append(created_from)
+    if created_to:
+        where.append("b.created <= ?")
+        params.append(created_to)
+    if published_from:
+        where.append("substr(b.published, 1, 10) >= ?")
+        params.append(published_from)
+    if published_to:
+        where.append("substr(b.published, 1, 10) <= ?")
+        params.append(published_to)
+    if has_audio is not None:
+        where.append(_HAS_AUDIO if has_audio else f"NOT {_HAS_AUDIO}")
+    if excluded is not None:
+        where.append(_IS_EXCLUDED if excluded else f"NOT {_IS_EXCLUDED}")
+    clause = " AND ".join(where)
+    async with _connect() as db:
+        async with db.execute(f"SELECT COUNT(*) FROM bookmarks b WHERE {clause}", params) as cur:
+            total = (await cur.fetchone())[0]
+        async with db.execute(
+            f"SELECT b.* FROM bookmarks b WHERE {clause} "
+            "ORDER BY b.created DESC, b.id LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    return rows, total
+
+
+async def auto_generation_candidates(created_from: str | None = None) -> list[dict]:
+    """Articles never queued and not excluded, oldest first."""
+    sql = (
+        f"SELECT b.* FROM bookmarks b WHERE {_VISIBLE} AND b.type = 'article' "
+        f"AND NOT {_IS_EXCLUDED} "
+        "AND NOT EXISTS (SELECT 1 FROM queued_bookmarks q WHERE q.bookmark_id = b.id)"
+    )
+    params: tuple = ()
+    if created_from:
+        sql += " AND b.created >= ?"
+        params = (created_from,)
+    async with _connect() as db:
+        async with db.execute(sql + " ORDER BY b.created, b.id", params) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
 
 # ── Settings ───────────────────────────────────────────────────────────────────

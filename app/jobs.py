@@ -38,10 +38,19 @@ async def _process_job(job: dict):
             audio_path=audio_path.name,
             error_msg=None,
         )
+        if not await models.get_job(job_id):
+            # The bookmark was removed by a sync while this job was running.
+            audio_path.unlink(missing_ok=True)
+            return
         logger.info("Job %s completed: %s", job_id, audio_path.name)
         # A bookmark has one audio file: a regeneration replaces the old one.
         superseded = await models.delete_superseded_audio(job["bookmark_id"])
         remove_audio_files(superseded)
+    except readeck.BookmarkGone:
+        # Deleted in Readeck since it was queued: there is nothing to read,
+        # and nothing of it worth keeping here either.
+        logger.info("Job %s: bookmark %s is gone from Readeck", job_id, job["bookmark_id"])
+        await forget_bookmarks([job["bookmark_id"]])
     except asyncio.CancelledError:
         # Shutdown: hand the job back to the queue so the next boot resumes it.
         logger.info("Job %s cancelled during shutdown; returning it to the queue", job_id)
@@ -57,6 +66,12 @@ async def _process_job(job: dict):
         )
 
 
+async def forget_bookmarks(bookmark_ids: list[str]) -> None:
+    """Drop bookmarks deleted in Readeck: their rows, jobs and audio files."""
+    if bookmark_ids:
+        remove_audio_files(await models.delete_bookmarks(bookmark_ids))
+
+
 def remove_audio_files(job_rows: list[dict]) -> None:
     """Delete the audio files of job rows that have just been deleted."""
     for row in job_rows:
@@ -64,22 +79,18 @@ def remove_audio_files(job_rows: list[dict]) -> None:
             (tts.AUDIO_DIR / Path(row["audio_path"]).name).unlink(missing_ok=True)
 
 
-async def queue_bookmarks(
-    bookmark_ids: list[str], prefetched: dict[str, dict[str, Any]] | None = None
-) -> tuple[int, int]:
+async def queue_bookmarks(bookmark_ids: list[str]) -> tuple[int, int]:
     """Queue a job per bookmark, skipping any with a job already pending or running.
 
-    `prefetched` maps ids to Readeck bookmarks the caller already has; the rest
-    are fetched. Returns (queued, skipped).
+    Titles and languages come from the local copy of Readeck; a bookmark not
+    synced yet is fetched. Returns (queued, skipped).
     """
     # De-duplicate while preserving order; a double submit can repeat ids.
     unique_ids = list(dict.fromkeys(bookmark_ids))
     queued_ids = [bid for bid in unique_ids if not await models.get_active_job_for_bookmark(bid)]
 
-    bookmarks = dict(prefetched or {})
-    # One concurrent fetch for the whole batch rather than a sequential round
-    # trip per bookmark, and the language is stored so the worker need not
-    # fetch the bookmark a second time.
+    bookmarks: dict[str, dict[str, Any]] = await models.get_bookmark_rows(queued_ids)
+    # The language is stored on the job so the worker need not look it up.
     bookmarks.update(await readeck.get_bookmarks([b for b in queued_ids if b not in bookmarks]))
     # A new attempt replaces an earlier failure rather than piling up beside it.
     await models.delete_failed_jobs(queued_ids)

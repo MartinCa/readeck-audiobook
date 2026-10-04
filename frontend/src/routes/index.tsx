@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute } from "@tanstack/react-router";
 import { ErrorState } from "@/components/ErrorState";
 import { Pagination } from "@/components/Pagination";
 import { Button } from "@/components/ui/button";
@@ -83,7 +83,17 @@ function BookmarksPage() {
               </Button>
             </>
           ) : (
-            <p>No bookmarks yet. Save some articles in Readeck and they will show up here.</p>
+            <>
+              <p>No bookmarks yet. Bookmarks saved in Readeck show up here after the next sync.</p>
+              <Button
+                variant="outline"
+                size="sm"
+                render={<Link to="/settings" />}
+                nativeButton={false}
+              >
+                Sync settings
+              </Button>
+            </>
           )}
         </div>
       ) : (

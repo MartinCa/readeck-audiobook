@@ -587,24 +587,132 @@
         "properties": {
           "autoGeneration": {
             "$ref": "#/components/schemas/AutoGenerationStatus"
+          },
+          "sync": {
+            "$ref": "#/components/schemas/SyncStatus"
           }
         },
         "required": [
+          "sync",
           "autoGeneration"
         ],
         "title": "Settings",
         "type": "object"
       },
       "SettingsUpdate": {
+        "description": "Either section, or both; a section left out is unchanged.",
         "properties": {
           "autoGeneration": {
-            "$ref": "#/components/schemas/AutoGenerationSettings"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoGenerationSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sync": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "SettingsUpdate",
+        "type": "object"
+      },
+      "SyncSettings": {
+        "properties": {
+          "cron": {
+            "title": "Cron",
+            "type": "string"
           }
         },
         "required": [
-          "autoGeneration"
+          "cron"
         ],
-        "title": "SettingsUpdate",
+        "title": "SyncSettings",
+        "type": "object"
+      },
+      "SyncStatus": {
+        "properties": {
+          "added": {
+            "title": "Added",
+            "type": "integer"
+          },
+          "bookmarkCount": {
+            "title": "Bookmarkcount",
+            "type": "integer"
+          },
+          "cron": {
+            "title": "Cron",
+            "type": "string"
+          },
+          "lastError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lasterror"
+          },
+          "lastRun": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastrun"
+          },
+          "nextRun": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextrun"
+          },
+          "removed": {
+            "title": "Removed",
+            "type": "integer"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cron",
+          "running",
+          "bookmarkCount",
+          "nextRun",
+          "lastRun",
+          "lastError",
+          "added",
+          "updated",
+          "removed"
+        ],
+        "title": "SyncStatus",
         "type": "object"
       },
       "ValidationError": {
@@ -1221,6 +1329,25 @@
           }
         },
         "summary": "Update Settings"
+      }
+    },
+    "/api/sync/run": {
+      "post": {
+        "description": "Start a sync with Readeck in the background; poll the settings for its result.",
+        "operationId": "run_sync_api_sync_run_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Run Sync"
       }
     },
     "/health": {

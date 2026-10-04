@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import weakref
-from datetime import date
 from typing import Any
 
 import httpx
@@ -24,6 +23,16 @@ _clients: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 class ReadeckError(RuntimeError):
     """Raised when the Readeck API cannot be reached or refuses the request."""
+
+
+class BookmarkGone(ReadeckError):
+    """Raised when Readeck answers 404: the bookmark has been deleted there."""
+
+
+def _raise_for_status(resp: httpx.Response) -> None:
+    if resp.status_code == 404:
+        raise BookmarkGone("The bookmark no longer exists in Readeck.")
+    resp.raise_for_status()
 
 
 def _client() -> httpx.AsyncClient:
@@ -62,76 +71,38 @@ def _describe(exc: Exception) -> str:
 
 # Readeck refuses a page size above this.
 MAX_PAGE_SIZE = 100
-
-
-def day_bound(day: date, end: bool = False) -> str:
-    """A `range_start`/`range_end` value covering `day` (UTC), inclusive.
-
-    Readeck lower-cases the value before parsing it, so an ISO timestamp's
-    `T` and `Z` become `t` and `z` and the request fails with 422. A plain
-    `YYYY-MM-DD HH:MM:SS` survives and is read as UTC.
-    """
-    return f"{day.isoformat()} {'23:59:59' if end else '00:00:00'}"
+# Concurrent page requests when reading many pages at once.
+_PARALLEL = 4
 
 
 async def list_bookmarks(
-    limit: int = 50,
-    offset: int = 0,
-    search: str = "",
-    range_start: str = "",
-    range_end: str = "",
-    types: tuple[str, ...] = (),
+    limit: int = MAX_PAGE_SIZE, offset: int = 0, ids: tuple[str, ...] | list[str] = ()
 ) -> dict[str, Any]:
-    """One page of bookmarks, newest first.
-
-    `range_start` / `range_end` filter on the date the bookmark was added to
-    Readeck (its `created` field), inclusive; Readeck reads an empty end as
-    "now" and an empty start as the beginning of time.
-    """
-    params: list[tuple[str, Any]] = [
-        ("limit", limit),
-        ("offset", offset),
-        ("is_loaded", "true"),
-        ("sort", "-created"),
-    ]
-    if search:
-        params.append(("search", search))
-    if range_start:
-        params.append(("range_start", range_start))
-    if range_end:
-        params.append(("range_end", range_end))
-    params.extend(("type", t) for t in types)
+    """One page of bookmarks, newest first, optionally only those in `ids`."""
+    params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset), ("sort", "-created")]
+    params.extend(("id", bid) for bid in ids)
     try:
         resp = await _client().get(f"{READECK_BASE_URL}/api/bookmarks", params=params)
         resp.raise_for_status()
     except Exception as exc:
         raise ReadeckError(_describe(exc)) from exc
-    return {
-        "items": resp.json(),
-        "total": int(resp.headers.get("Total-Count", 0)),
-        "total_pages": int(resp.headers.get("Total-Pages", 1)),
-        "current_page": int(resp.headers.get("Current-Page", 1)),
-    }
+    return {"items": resp.json(), "total": int(resp.headers.get("Total-Count", 0))}
 
 
-async def list_all_bookmarks(**filters: Any) -> list[dict[str, Any]]:
-    """Every bookmark matching `filters` (see list_bookmarks), newest first.
+async def list_all_bookmarks() -> list[dict[str, Any]]:
+    """Every bookmark, newest first.
 
     Readeck caps a page at 100, so this reads the first page to learn the
     total and then fetches the rest a few at a time.
     """
-    first = await list_bookmarks(limit=MAX_PAGE_SIZE, offset=0, **filters)
+    first = await list_bookmarks(offset=0)
     items = list(first["items"])
     offsets = range(MAX_PAGE_SIZE, first["total"], MAX_PAGE_SIZE)
-    if not offsets:
-        return items
-
-    limiter = asyncio.Semaphore(4)
+    limiter = asyncio.Semaphore(_PARALLEL)
 
     async def fetch(offset: int) -> list[dict[str, Any]]:
         async with limiter:
-            page = await list_bookmarks(limit=MAX_PAGE_SIZE, offset=offset, **filters)
-            return page["items"]
+            return (await list_bookmarks(offset=offset))["items"]
 
     for page_items in await asyncio.gather(*(fetch(o) for o in offsets)):
         items.extend(page_items)
@@ -140,10 +111,48 @@ async def list_all_bookmarks(**filters: Any) -> list[dict[str, Any]]:
     return list({bm["id"]: bm for bm in items}.values())
 
 
+async def fetch_bookmarks(bookmark_ids: list[str]) -> list[dict[str, Any]]:
+    """The bookmarks with these ids, 100 to a request; ids Readeck no longer has are absent."""
+    chunks = [
+        bookmark_ids[i : i + MAX_PAGE_SIZE] for i in range(0, len(bookmark_ids), MAX_PAGE_SIZE)
+    ]
+    limiter = asyncio.Semaphore(_PARALLEL)
+
+    async def fetch(chunk: list[str]) -> list[dict[str, Any]]:
+        async with limiter:
+            return (await list_bookmarks(limit=len(chunk), ids=chunk))["items"]
+
+    items: list[dict[str, Any]] = []
+    for page_items in await asyncio.gather(*(fetch(c) for c in chunks)):
+        items.extend(page_items)
+    return items
+
+
+async def sync_list() -> dict[str, str]:
+    """Every bookmark id with its last-updated time, from one request.
+
+    Uses Readeck's sync endpoint; a Readeck too old to have it answers 404,
+    and then the full bookmark list stands in.
+    """
+    try:
+        resp = await _client().get(f"{READECK_BASE_URL}/api/bookmarks/sync")
+        if resp.status_code == 404:
+            logger.info("Readeck has no sync endpoint; reading the full bookmark list instead")
+            return {bm["id"]: bm.get("updated") or "" for bm in await list_all_bookmarks()}
+        resp.raise_for_status()
+    except ReadeckError:
+        raise
+    except Exception as exc:
+        raise ReadeckError(_describe(exc)) from exc
+    return {item["id"]: item["time"] for item in resp.json() if item.get("type") != "delete"}
+
+
 async def get_bookmark(bookmark_id: str) -> dict[str, Any]:
     try:
         resp = await _client().get(f"{READECK_BASE_URL}/api/bookmarks/{bookmark_id}")
-        resp.raise_for_status()
+        _raise_for_status(resp)
+    except ReadeckError:
+        raise
     except Exception as exc:
         raise ReadeckError(_describe(exc)) from exc
     return resp.json()
@@ -186,9 +195,17 @@ async def get_article_text(bookmark_id: str) -> str:
             f"{READECK_BASE_URL}/api/bookmarks/{bookmark_id}/article",
             headers={"Accept": "text/html"},
         )
-        resp.raise_for_status()
+        if resp.status_code != 404:
+            resp.raise_for_status()
     except Exception as exc:
         raise ReadeckError(_describe(exc)) from exc
+
+    if resp.status_code == 404:
+        # Either the bookmark is gone or it simply has no article (a picture,
+        # say); only the bookmark itself can tell which. This raises
+        # BookmarkGone in the first case.
+        await get_bookmark(bookmark_id)
+        raise ReadeckError("Readeck has no article text for this bookmark.")
 
     soup = BeautifulSoup(resp.text, "html.parser")
     return soup.get_text(separator="\n", strip=True)

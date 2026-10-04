@@ -17,7 +17,8 @@ A lightweight FastAPI web app that converts [Readeck](https://readeck.org) bookm
 - After changing an endpoint or schema, run `python scripts/export_openapi.py` and `pnpm generate:api-types` in `frontend/`; `tests/test_openapi.py` fails until the checked-in spec matches.
 - The app makes no CDN requests at runtime (fonts and scripts are bundled by Vite); keep it that way.
 - A completed job *is* the bookmark's audio: the Bookmarks page shows it, and the Jobs page lists only pending, processing and failed jobs. A new completion for a bookmark replaces its earlier audio.
-- Auto generation settings live in the `settings` table (edited in the UI), not the environment. A run only queues bookmarks absent from `queued_bookmarks` and `auto_excluded`, so each bookmark is picked up once.
+- Bookmarks are read from the local `bookmarks` table, which `app/sync.py` keeps current from Readeck's `/api/bookmarks/sync` (ids and update times, then only changed bookmarks are fetched). The bookmark listing never calls Readeck; a bookmark gone from Readeck is removed with its jobs and audio via `jobs.forget_bookmarks`.
+- Sync and auto generation settings live in the `settings` table (edited in the UI), not the environment; both crons run on the loop in `app/scheduler.py`. An auto generation run only queues bookmarks absent from `queued_bookmarks` and `auto_excluded`, so each bookmark is picked up once.
 - Lists poll with TanStack Query's `refetchInterval`, one request for the whole page and only while a job on it is queued or generating. Avoid per-card polling.
 
 ## MCP servers
