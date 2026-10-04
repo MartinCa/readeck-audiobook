@@ -53,8 +53,8 @@ class BookmarkFilters:
         # the last second of that day to make the range inclusive.
         return {
             "search": self.search,
-            "range_start": f"{self.added_from.isoformat()}T00:00:00Z" if self.added_from else "",
-            "range_end": f"{self.added_to.isoformat()}T23:59:59Z" if self.added_to else "",
+            "range_start": readeck.day_bound(self.added_from) if self.added_from else "",
+            "range_end": readeck.day_bound(self.added_to, end=True) if self.added_to else "",
         }
 
 

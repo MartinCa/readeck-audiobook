@@ -56,7 +56,7 @@ async def test_run_limits_to_articles_added_since_the_start_date(readeck_article
     listing = readeck_articles()
     await autogen.run_once(autogen.AutoGenSettings(enabled=True, since=date(2026, 2, 1)))
     assert listing.call_args.kwargs == {
-        "range_start": "2026-02-01T00:00:00Z",
+        "range_start": "2026-02-01 00:00:00",
         "types": ("article",),
     }
 

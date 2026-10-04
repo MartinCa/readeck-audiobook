@@ -101,8 +101,8 @@ async def test_search_and_added_range_go_to_readeck(client, readeck_page):
     )
     kwargs = mock.call_args.kwargs
     assert kwargs["search"] == "go"
-    assert kwargs["range_start"] == "2026-01-01T00:00:00Z"
-    assert kwargs["range_end"] == "2026-01-31T23:59:59Z"
+    assert kwargs["range_start"] == "2026-01-01 00:00:00"
+    assert kwargs["range_end"] == "2026-01-31 23:59:59"
     assert kwargs["offset"] == 30
 
 

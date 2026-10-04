@@ -1,5 +1,7 @@
 """Tests for the Readeck API client using respx to mock httpx."""
 
+from datetime import date
+
 import httpx
 import pytest
 import respx
@@ -151,17 +153,26 @@ async def test_close_client_is_safe_when_none_was_created():
     await readeck.close_client()
 
 
+def test_day_bound_survives_readecks_lower_casing():
+    # Readeck lower-cases range values before parsing; "2026-01-01t00:00:00z"
+    # no longer parses, so the bound must carry no letters at all.
+    start = readeck.day_bound(date(2026, 1, 1))
+    end = readeck.day_bound(date(2026, 1, 1), end=True)
+    assert (start, end) == ("2026-01-01 00:00:00", "2026-01-01 23:59:59")
+    assert start == start.lower() and end == end.lower()
+
+
 @respx.mock
 async def test_list_bookmarks_forwards_filters():
     route = respx.get("http://readeck.test/api/bookmarks").mock(
         return_value=httpx.Response(200, json=[], headers={"Total-Count": "0"})
     )
     await readeck.list_bookmarks(
-        range_start="2026-01-01T00:00:00Z", range_end="2026-02-01T23:59:59Z", types=("article",)
+        range_start="2026-01-01 00:00:00", range_end="2026-02-01 23:59:59", types=("article",)
     )
     params = route.calls[0].request.url.params
-    assert params["range_start"] == "2026-01-01T00:00:00Z"
-    assert params["range_end"] == "2026-02-01T23:59:59Z"
+    assert params["range_start"] == "2026-01-01 00:00:00"
+    assert params["range_end"] == "2026-02-01 23:59:59"
     assert params["type"] == "article"
     assert params["sort"] == "-created"
     assert "search" not in params

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import weakref
+from datetime import date
 from typing import Any
 
 import httpx
@@ -61,6 +62,16 @@ def _describe(exc: Exception) -> str:
 
 # Readeck refuses a page size above this.
 MAX_PAGE_SIZE = 100
+
+
+def day_bound(day: date, end: bool = False) -> str:
+    """A `range_start`/`range_end` value covering `day` (UTC), inclusive.
+
+    Readeck lower-cases the value before parsing it, so an ISO timestamp's
+    `T` and `Z` become `t` and `z` and the request fails with 422. A plain
+    `YYYY-MM-DD HH:MM:SS` survives and is read as UTC.
+    """
+    return f"{day.isoformat()} {'23:59:59' if end else '00:00:00'}"
 
 
 async def list_bookmarks(

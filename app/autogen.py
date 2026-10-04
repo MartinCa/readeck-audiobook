@@ -91,7 +91,7 @@ async def run_once(settings: AutoGenSettings | None = None) -> tuple[int, int]:
     state = RunState(last_run=datetime.now(UTC))
     try:
         candidates = await readeck.list_all_bookmarks(
-            range_start=f"{settings.since.isoformat()}T00:00:00Z" if settings.since else "",
+            range_start=readeck.day_bound(settings.since) if settings.since else "",
             # Videos and pictures have next to no text to read out.
             types=("article",),
         )
