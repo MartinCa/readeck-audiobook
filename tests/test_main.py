@@ -269,6 +269,22 @@ async def test_post_jobs_allows_requeue_after_completion(client, monkeypatch):
     assert resp.json() == {"queued": 1, "skipped": 0}
 
 
+async def test_post_jobs_replaces_an_earlier_failure(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.readeck.get_bookmark", AsyncMock(return_value={"title": "A", "url": "http://x"})
+    )
+    failed = await models.create_job("abc", "A", "http://x", "edge-tts", "v")
+    await models.update_job(failed["id"], status=models.JobStatus.failed, error_msg="boom")
+    other = await models.create_job("other", "B", "http://x", "edge-tts", "v")
+    await models.update_job(other["id"], status=models.JobStatus.failed, error_msg="boom")
+
+    await client.post("/api/jobs", json={"bookmarkIds": ["abc"]})
+    jobs, total = await models.list_jobs()
+    assert total == 2
+    assert await models.get_job(failed["id"]) is None
+    assert await models.get_job(other["id"])
+
+
 async def test_post_jobs_stores_language_and_resolved_engine(client, monkeypatch):
     """The engine and voice are resolved once, at queue time, and stored, so the
     UI reports what actually ran rather than the current TTS_ENGINE."""

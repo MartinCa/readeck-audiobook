@@ -367,6 +367,20 @@ async def delete_completed_jobs(bookmark_ids: list[str], keep_job_id: str = "") 
     return deleted
 
 
+async def delete_failed_jobs(bookmark_ids: list[str]) -> int:
+    """Drop the failed jobs of bookmarks that are being queued again."""
+    deleted = 0
+    async with _connect() as db:
+        for chunk in _chunks(bookmark_ids):
+            placeholders = ", ".join("?" * len(chunk))
+            cur = await db.execute(
+                f"DELETE FROM jobs WHERE status = 'failed' AND bookmark_id IN ({placeholders})",
+                tuple(chunk),
+            )
+            deleted += cur.rowcount
+    return deleted
+
+
 async def retry_job(job_id: str) -> dict | None:
     """Send a failed job back to the queue with a fresh attempt budget."""
     async with _connect() as db:

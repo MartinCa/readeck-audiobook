@@ -82,6 +82,8 @@ async def queue_bookmarks(
     # trip per bookmark, and the language is stored so the worker need not
     # fetch the bookmark a second time.
     bookmarks.update(await readeck.get_bookmarks([b for b in queued_ids if b not in bookmarks]))
+    # A new attempt replaces an earlier failure rather than piling up beside it.
+    await models.delete_failed_jobs(queued_ids)
 
     for bid in queued_ids:
         bm = bookmarks.get(bid, {})
