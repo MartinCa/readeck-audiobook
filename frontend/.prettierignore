@@ -5,3 +5,5 @@ src/routeTree.gen.ts
 
 # Prose is hand-wrapped and tables hand-aligned to stay readable in diffs.
 *.md
+# Written by scripts/export_openapi.py; tests/test_openapi.py compares it byte for byte.
+openapi.json
