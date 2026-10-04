@@ -1,6 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "github>MartinCa/renovate-config:apps"
+    "github>MartinCa/renovate-config:apps",
+    "github>MartinCa/frontend-kit:renovate-frontend"
+  ],
+  "packageRules": [
+    {
+      "description": "typescript-eslint supports TypeScript <6.1 (see frontend-kit docs/MAINTENANCE.md)",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<6.1.0"
+    }
   ]
 }
