@@ -31,6 +31,7 @@ async def _process_job(job: dict):
             engine=job.get("tts_engine") or "",
             voice=job.get("voice") or "",
             lang=job.get("lang") or "",
+            on_progress=lambda done, total: models.set_job_progress(job_id, done, total),
         )
         await models.update_job(
             job_id,

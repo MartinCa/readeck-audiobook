@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at    TEXT NOT NULL,
     updated_at    TEXT,
     audio_path    TEXT,
-    error_msg     TEXT
+    error_msg     TEXT,
+    progress_done INTEGER,
+    progress_total INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_bookmark ON jobs(bookmark_id, status);
@@ -81,6 +83,8 @@ CREATE TABLE IF NOT EXISTS settings (
 _MIGRATIONS = {
     "lang": "ALTER TABLE jobs ADD COLUMN lang TEXT",
     "attempts": "ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+    "progress_done": "ALTER TABLE jobs ADD COLUMN progress_done INTEGER",
+    "progress_total": "ALTER TABLE jobs ADD COLUMN progress_total INTEGER",
 }
 
 
@@ -238,6 +242,21 @@ async def update_job(job_id: str, **kwargs):
         await db.execute(f"UPDATE jobs SET {sets} WHERE id = ?", values)
 
 
+async def set_job_progress(job_id: str, done: int, total: int) -> None:
+    """Record how many of a running job's text chunks have been synthesized.
+
+    Leaves updated_at alone: it dates status changes, and a completed job's
+    becomes its audio's generation time. Only ever moves forward and only while
+    the job is running, so a late write cannot rewind it or touch a finished job.
+    """
+    async with _connect() as db:
+        await db.execute(
+            "UPDATE jobs SET progress_done = ?, progress_total = ? "
+            "WHERE id = ? AND status = ? AND COALESCE(progress_done, -1) < ?",
+            (done, total, job_id, JobStatus.processing, done),
+        )
+
+
 async def delete_job(job_id: str, statuses: tuple[str, ...] | None = None) -> dict | None:
     """Delete a job, optionally only while it has one of `statuses`; returns the row."""
     where = f" AND status IN ({', '.join('?' * len(statuses))})" if statuses else ""
@@ -335,7 +354,8 @@ async def claim_next_pending_job(max_concurrent: int) -> dict | None:
         async with db.execute(
             """
             UPDATE jobs
-               SET status = 'processing', updated_at = ?, attempts = attempts + 1
+               SET status = 'processing', updated_at = ?, attempts = attempts + 1,
+                   progress_done = NULL, progress_total = NULL
              WHERE id = (
                  SELECT id FROM jobs
                   WHERE status = 'pending'

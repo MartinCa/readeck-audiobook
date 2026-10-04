@@ -54,6 +54,25 @@ class TestProcessJob:
         assert updated["audio_path"] == "an-article-abc123.mp3"
         assert updated["error_msg"] is None
 
+    async def test_records_synthesis_progress_on_the_job(self, monkeypatch, audio_dir):
+        job = await _queue()
+        claimed = await models.claim_next_pending_job(2)
+        monkeypatch.setattr(jobs.readeck, "get_article_text", _returns("Some words."))
+        seen = {}
+
+        async def fake_generate(job_id, text, on_progress, **kwargs):
+            await on_progress(2, 5)
+            row = await models.get_job(job_id)
+            seen["progress"] = (row["progress_done"], row["progress_total"])
+            path = audio_dir / "x.mp3"
+            path.write_bytes(b"audio")
+            return path
+
+        monkeypatch.setattr(jobs.tts, "generate_audio", fake_generate)
+        await jobs._process_job(claimed)
+        assert seen["progress"] == (2, 5)
+        assert (await models.get_job(job["id"]))["status"] == models.JobStatus.completed
+
     async def test_passes_the_stored_engine_and_voice_through(self, monkeypatch, audio_dir):
         """The worker used to ignore the job's columns and re-read TTS_ENGINE,
         so the badge on the Jobs page could disagree with what actually ran."""

@@ -212,7 +212,7 @@ Both images build on Python 3.14. CI runs the suite on 3.12 (the declared minimu
 2. The selected bookmarks' title and language are read from the local copy of Readeck, and a `Job` row is inserted per bookmark with `status=pending`, recording the article's language and the engine/voice resolved from it
 3. The background worker atomically claims pending jobs (up to `MAX_CONCURRENT_JOBS` at a time) and marks them `processing`
 4. The worker fetches the article text (Markdown preferred, HTML fallback) and strips markup down to speakable prose
-5. The recorded TTS engine synthesises the audio in chunks, retrying failures, and writes an MP3 to `AUDIO_DIR` via a temp file so a crash cannot leave a truncated download
+5. The recorded TTS engine synthesises the audio in chunks, retrying failures, and writes an MP3 to `AUDIO_DIR` via a temp file so a crash cannot leave a truncated download. Each finished chunk is recorded on the job, so its badge shows how far through the article it is
 6. The job is marked `completed` with an `audio_path`, replacing any earlier audio for that bookmark; the bookmark now shows a player and a download link, and the job leaves the Jobs page
 7. While a job is queued or generating, the Bookmarks and Jobs pages refresh their list in one request every 4 seconds
 

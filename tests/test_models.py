@@ -244,6 +244,33 @@ async def test_claim_next_pending_job():
     assert claimed["status"] == JobStatus.processing
 
 
+async def test_job_progress_only_moves_forward_while_running():
+    job = await models.create_job("bm1", "Test", "http://example.com", "edge-tts", "v")
+    # Not running yet: nothing to record.
+    await models.set_job_progress(job["id"], 1, 4)
+    assert (await models.get_job(job["id"]))["progress_total"] is None
+
+    await models.claim_next_pending_job(max_concurrent=2)
+    await models.set_job_progress(job["id"], 2, 4)
+    await models.set_job_progress(job["id"], 1, 4)  # arrived late
+    row = await models.get_job(job["id"])
+    assert (row["progress_done"], row["progress_total"]) == (2, 4)
+
+    await models.update_job(job["id"], status=JobStatus.completed)
+    await models.set_job_progress(job["id"], 3, 4)
+    assert (await models.get_job(job["id"]))["progress_done"] == 2
+
+
+async def test_claim_starts_progress_afresh():
+    job = await models.create_job("bm1", "Test", "http://example.com", "edge-tts", "v")
+    await models.claim_next_pending_job(max_concurrent=2)
+    await models.set_job_progress(job["id"], 3, 4)
+    # Interrupted and requeued: the next attempt starts from the beginning.
+    await models.update_job(job["id"], status=JobStatus.pending)
+    claimed = await models.claim_next_pending_job(max_concurrent=2)
+    assert (claimed["progress_done"], claimed["progress_total"]) == (None, None)
+
+
 async def test_claim_returns_none_when_queue_empty():
     result = await models.claim_next_pending_job(max_concurrent=2)
     assert result is None

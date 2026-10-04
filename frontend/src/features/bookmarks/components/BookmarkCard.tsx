@@ -64,7 +64,9 @@ export function BookmarkCard({ bookmark, selected, onSelectedChange }: BookmarkC
             {bookmark.type && bookmark.type !== "article" && (
               <Badge variant="outline">{bookmark.type}</Badge>
             )}
-            {bookmark.job && <JobStatusBadge status={bookmark.job.status} />}
+            {bookmark.job && (
+              <JobStatusBadge status={bookmark.job.status} progress={bookmark.job.progress} />
+            )}
             {bookmark.autoExcluded && (
               <Badge variant="outline">
                 <BanIcon aria-hidden />

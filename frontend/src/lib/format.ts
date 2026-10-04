@@ -1,5 +1,6 @@
 import cronstrue from "cronstrue";
 import { format, formatDistanceToNow, isValid, parseISO } from "date-fns";
+import type { Job } from "@/lib/types";
 
 /** "4 Oct 2026" — for dates where the time of day is noise. */
 export function formatDay(iso: string | null | undefined): string {
@@ -47,4 +48,19 @@ export function describeCron(expr: string): string {
 
 export function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+const jobStatusLabels: Record<Job["status"], string> = {
+  pending: "Queued",
+  processing: "Generating audio",
+  completed: "Audio ready",
+  failed: "Failed",
+};
+
+/** The badge text, with how far through the article a running job is. */
+export function jobStatusLabel(status: Job["status"], progress?: Job["progress"]) {
+  if (status !== "processing" || !progress?.total) return jobStatusLabels[status];
+  // Every chunk is spoken, but the file is still being encoded and tagged.
+  if (progress.done >= progress.total) return "Finishing audio";
+  return `${jobStatusLabels.processing} · ${Math.floor((progress.done / progress.total) * 100)}%`;
 }

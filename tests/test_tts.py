@@ -1,5 +1,6 @@
 """Tests for text preparation, filenames and engine dispatch in app.tts."""
 
+import asyncio
 import subprocess
 import sys
 import time
@@ -341,6 +342,22 @@ class TestSynthesizeKokoro:
         assert len(fake_sherpa["writes"]) == len(fake_sherpa["generated"])
         assert fake_sherpa["closed"] is True
 
+    async def test_reports_progress_per_chunk(self, tmp_path, fake_sherpa, monkeypatch):
+        monkeypatch.setattr(tts.config, "TTS_CHUNK_CHARS", 200)
+        text = "\n\n".join(f"Paragraph number {i} with enough words." * 3 for i in range(10))
+        seen = []
+
+        async def record(done, total):
+            seen.append((done, total))
+
+        await tts.synthesize_kokoro(text, tmp_path / "out.mp3", "af_heart", record)
+        # The per-chunk reports are scheduled from the synthesis thread.
+        await asyncio.sleep(0)
+
+        total = len(fake_sherpa["generated"])
+        assert total > 1
+        assert sorted(seen) == [(n, total) for n in range(total + 1)]
+
     async def test_ffmpeg_is_told_the_format_for_the_part_file(self, audio_dir, fake_sherpa):
         """generate_audio synthesizes to '<name>.mp3.part' and renames it into place.
         ffmpeg picks its muxer from the extension and ".part" means nothing to it, so
@@ -537,11 +554,11 @@ class TestGenerateAudio:
     def fake_backends(self, monkeypatch):
         calls = {}
 
-        async def fake_edge(text, output_path, voice):
+        async def fake_edge(text, output_path, voice, on_progress=None):
             calls["edge"] = {"voice": voice, "text": text}
             output_path.write_bytes(b"edge-audio")
 
-        async def fake_kokoro(text, output_path, voice=""):
+        async def fake_kokoro(text, output_path, voice="", on_progress=None):
             calls["kokoro"] = {"voice": voice, "text": text}
             output_path.write_bytes(b"kokoro-audio")
 
@@ -584,7 +601,7 @@ class TestGenerateAudio:
             await tts.generate_audio("job1", "", engine="edge-tts", voice="v")
 
     async def test_leaves_no_partial_file_when_synthesis_fails(self, audio_dir, monkeypatch):
-        async def boom(text, output_path, voice):
+        async def boom(text, output_path, voice, on_progress=None):
             output_path.write_bytes(b"half a file")
             raise RuntimeError("connection dropped")
 
@@ -595,7 +612,7 @@ class TestGenerateAudio:
         assert list(audio_dir.iterdir()) == []
 
     async def test_rejects_an_empty_output_file(self, audio_dir, monkeypatch):
-        async def writes_nothing(text, output_path, voice):
+        async def writes_nothing(text, output_path, voice, on_progress=None):
             output_path.write_bytes(b"")
 
         monkeypatch.setattr(tts, "synthesize_edge_tts", writes_nothing)
@@ -636,6 +653,35 @@ class TestEdgeTtsChunking:
         await tts.synthesize_edge_tts("Short text.", out, "v")
 
         assert attempts["n"] == 3
+        assert out.read_bytes() == b"ok"
+
+    async def test_reports_progress_per_chunk(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(tts.config, "TTS_CHUNK_CHARS", 30)
+
+        async def fake_chunk(text, voice):
+            return b"x"
+
+        seen = []
+
+        async def record(done, total):
+            seen.append((done, total))
+
+        monkeypatch.setattr(tts, "_edge_tts_chunk", fake_chunk)
+        await tts.synthesize_edge_tts(
+            "\n\n".join(["word " * 5] * 4), tmp_path / "out.mp3", "v", record
+        )
+        assert seen == [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4)]
+
+    async def test_a_failing_progress_callback_does_not_fail_synthesis(self, monkeypatch, tmp_path):
+        async def fake_chunk(text, voice):
+            return b"ok"
+
+        async def broken(done, total):
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(tts, "_edge_tts_chunk", fake_chunk)
+        out = tmp_path / "out.mp3"
+        await tts.synthesize_edge_tts("Short text.", out, "v", broken)
         assert out.read_bytes() == b"ok"
 
     async def test_gives_up_after_the_retry_budget(self, monkeypatch, tmp_path):
@@ -685,7 +731,7 @@ class TestTagging:
     async def test_generated_files_are_tagged(self, audio_dir, monkeypatch):
         from mutagen.id3 import ID3
 
-        async def fake_edge(text, output_path, voice):
+        async def fake_edge(text, output_path, voice, on_progress=None):
             output_path.write_bytes(b"\xff\xfb\x90\x00" + b"\x00" * 400)
 
         monkeypatch.setattr(tts, "synthesize_edge_tts", fake_edge)
