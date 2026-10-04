@@ -13,6 +13,8 @@ services:
       AUTH_USERNAME: ${AUTH_USERNAME:-}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
+      # Time zone the auto generation cron schedule is read in.
+      TZ: ${TZ:-UTC}
     volumes:
       - audio_data:/app/audio
       - db_data:/app/data

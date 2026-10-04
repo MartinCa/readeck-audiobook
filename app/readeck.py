@@ -59,10 +59,37 @@ def _describe(exc: Exception) -> str:
     return str(exc)
 
 
-async def list_bookmarks(limit: int = 50, offset: int = 0, search: str = "") -> dict[str, Any]:
-    params: dict[str, Any] = {"limit": limit, "offset": offset, "is_loaded": True}
+# Readeck refuses a page size above this.
+MAX_PAGE_SIZE = 100
+
+
+async def list_bookmarks(
+    limit: int = 50,
+    offset: int = 0,
+    search: str = "",
+    range_start: str = "",
+    range_end: str = "",
+    types: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """One page of bookmarks, newest first.
+
+    `range_start` / `range_end` filter on the date the bookmark was added to
+    Readeck (its `created` field), inclusive; Readeck reads an empty end as
+    "now" and an empty start as the beginning of time.
+    """
+    params: list[tuple[str, Any]] = [
+        ("limit", limit),
+        ("offset", offset),
+        ("is_loaded", "true"),
+        ("sort", "-created"),
+    ]
     if search:
-        params["search"] = search
+        params.append(("search", search))
+    if range_start:
+        params.append(("range_start", range_start))
+    if range_end:
+        params.append(("range_end", range_end))
+    params.extend(("type", t) for t in types)
     try:
         resp = await _client().get(f"{READECK_BASE_URL}/api/bookmarks", params=params)
         resp.raise_for_status()
@@ -74,6 +101,32 @@ async def list_bookmarks(limit: int = 50, offset: int = 0, search: str = "") -> 
         "total_pages": int(resp.headers.get("Total-Pages", 1)),
         "current_page": int(resp.headers.get("Current-Page", 1)),
     }
+
+
+async def list_all_bookmarks(**filters: Any) -> list[dict[str, Any]]:
+    """Every bookmark matching `filters` (see list_bookmarks), newest first.
+
+    Readeck caps a page at 100, so this reads the first page to learn the
+    total and then fetches the rest a few at a time.
+    """
+    first = await list_bookmarks(limit=MAX_PAGE_SIZE, offset=0, **filters)
+    items = list(first["items"])
+    offsets = range(MAX_PAGE_SIZE, first["total"], MAX_PAGE_SIZE)
+    if not offsets:
+        return items
+
+    limiter = asyncio.Semaphore(4)
+
+    async def fetch(offset: int) -> list[dict[str, Any]]:
+        async with limiter:
+            page = await list_bookmarks(limit=MAX_PAGE_SIZE, offset=offset, **filters)
+            return page["items"]
+
+    for page_items in await asyncio.gather(*(fetch(o) for o in offsets)):
+        items.extend(page_items)
+    # A bookmark added between page reads shifts every later page by one, so
+    # the same item can turn up twice.
+    return list({bm["id"]: bm for bm in items}.values())
 
 
 async def get_bookmark(bookmark_id: str) -> dict[str, Any]:

@@ -407,3 +407,91 @@ async def test_init_db_migrates_a_database_without_the_new_columns(tmp_path, mon
     assert job["bookmark_title"] == "Legacy"
     assert job["lang"] is None
     assert job["attempts"] == 0
+
+
+# ── Audio, exclusion and settings ──────────────────────────────────────────────
+
+
+async def _job(bookmark_id: str, status: JobStatus | None = None, audio_path: str = "") -> dict:
+    job = await models.create_job(bookmark_id, "T", "http://x", "edge-tts", "v")
+    if status:
+        await models.update_job(job["id"], status=status, audio_path=audio_path or None)
+    return await models.get_job(job["id"])
+
+
+async def test_audio_by_bookmark_returns_the_newest_completed_job():
+    await _job("a", JobStatus.completed, "old.mp3")
+    newest = await _job("a", JobStatus.completed, "new.mp3")
+    await _job("a", JobStatus.failed)
+    await _job("b")
+
+    audio = await models.audio_by_bookmark(["a", "b"])
+    assert set(audio) == {"a"}
+    assert audio["a"]["id"] == newest["id"]
+    assert set(await models.audio_by_bookmark()) == {"a"}
+
+
+async def test_latest_jobs_by_bookmark():
+    await _job("a", JobStatus.completed, "a.mp3")
+    failed = await _job("a", JobStatus.failed)
+    latest = await models.latest_jobs_by_bookmark(["a", "missing"])
+    assert latest == {"a": failed}
+
+
+async def test_delete_superseded_audio_keeps_the_latest_completion():
+    old = await _job("a", JobStatus.completed, "old.mp3")
+    keep = await _job("a", JobStatus.completed, "new.mp3")
+    pending = await _job("a")
+    other = await _job("b", JobStatus.completed, "b.mp3")
+
+    deleted = await models.delete_superseded_audio("a")
+    assert [d["id"] for d in deleted] == [old["id"]]
+    assert await models.get_job(keep["id"])
+    assert await models.get_job(pending["id"])
+    assert await models.get_job(other["id"])
+    # Running it again for the other completion agrees on the same survivor.
+    assert await models.delete_superseded_audio("a") == []
+
+
+async def test_open_statuses_leave_out_completed():
+    await _job("a", JobStatus.completed, "a.mp3")
+    pending = await _job("b")
+    jobs, total = await models.list_jobs(statuses=models.OPEN_STATUSES)
+    assert total == 1
+    assert jobs[0]["id"] == pending["id"]
+    assert await models.list_job_ids(statuses=models.OPEN_STATUSES) == [pending["id"]]
+
+
+async def test_auto_exclusion():
+    await models.set_auto_excluded(["a", "b", "a"], True)
+    assert await models.auto_excluded_ids() == {"a", "b"}
+    await models.set_auto_excluded(["a"], False)
+    assert await models.auto_excluded_ids() == {"b"}
+
+
+async def test_queued_bookmarks_outlive_their_jobs():
+    job = await _job("a")
+    await models.delete_job(job["id"])
+    assert await models.queued_bookmark_ids() == {"a"}
+
+
+async def test_init_db_backfills_queued_bookmarks_from_existing_jobs():
+    await _job("a")
+    async with models._connect() as db:
+        await db.execute("DELETE FROM queued_bookmarks")
+    await models.init_db()
+    assert await models.queued_bookmark_ids() == {"a"}
+
+
+async def test_settings_upsert_and_remove():
+    await models.set_settings({"x": "1", "y": "2"})
+    await models.set_settings({"x": "3", "y": None})
+    assert await models.get_settings() == {"x": "3"}
+
+
+async def test_retry_job_only_touches_failed_jobs():
+    pending = await _job("a")
+    assert await models.retry_job(pending["id"]) is None
+    failed = await _job("b", JobStatus.failed)
+    retried = await models.retry_job(failed["id"])
+    assert retried["status"] == JobStatus.pending

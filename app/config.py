@@ -25,6 +25,10 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
 
 DATA_DIR = _env_path("DATA_DIR", "/app/data")
 AUDIO_DIR = _env_path("AUDIO_DIR", "/app/audio")
+# The built frontend (`pnpm build` in frontend/). The images copy it to
+# /app/static; for local work point it at frontend/dist, or run the Vite dev
+# server instead, which proxies /api here.
+FRONTEND_DIR = _env_path("FRONTEND_DIR", str(Path(__file__).resolve().parent.parent / "static"))
 
 # ── Readeck ────────────────────────────────────────────────────────────────────
 

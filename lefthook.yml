@@ -4,5 +4,7 @@ remotes:
     configs:
       - lefthook-shared.yml
       - langs/python.yml
+      - langs/ts.yml
       - commit-msg.yml
       - pre-push-python.yml
+      - pre-push-ts.yml

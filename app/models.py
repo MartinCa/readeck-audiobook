@@ -32,6 +32,26 @@ CREATE INDEX IF NOT EXISTS idx_jobs_bookmark ON jobs(bookmark_id, status);
 -- rowid cannot appear in an index definition; it is implicitly the trailing
 -- key of every index entry, which is exactly the tiebreak the listing wants.
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
+
+-- Bookmarks the user has opted out of automatic audio generation.
+CREATE TABLE IF NOT EXISTS auto_excluded (
+    bookmark_id   TEXT PRIMARY KEY,
+    created_at    TEXT NOT NULL
+);
+
+-- Every bookmark a job was ever queued for, by hand or automatically. Auto
+-- generation only picks up bookmarks that are not in here, so deleting a
+-- bookmark's audio (which deletes its job rows) does not make the next
+-- scheduled run generate it again, and a failed job is not retried forever.
+CREATE TABLE IF NOT EXISTS queued_bookmarks (
+    bookmark_id     TEXT PRIMARY KEY,
+    first_queued_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 # Columns added after the initial release, applied to existing databases on
@@ -84,6 +104,11 @@ async def init_db():
         for column, statement in _MIGRATIONS.items():
             if column not in existing:
                 await db.execute(statement)
+        # Databases from before queued_bookmarks existed: their jobs count.
+        await db.execute(
+            "INSERT OR IGNORE INTO queued_bookmarks (bookmark_id, first_queued_at) "
+            "SELECT bookmark_id, MIN(created_at) FROM jobs GROUP BY bookmark_id"
+        )
 
 
 async def create_job(
@@ -93,14 +118,32 @@ async def create_job(
     tts_engine: str,
     voice: str,
     lang: str = "",
-) -> dict:
+    only_if_idle: bool = False,
+) -> dict | None:
+    """Insert a pending job and return it.
+
+    With `only_if_idle`, nothing is inserted (and None returned) when the
+    bookmark already has a pending or processing job. The check is part of the
+    INSERT, so two callers queueing the same bookmark at once cannot both win.
+    """
     job_id = str(uuid.uuid4())
+    now = _now()
+    values = (job_id, bookmark_id, bookmark_title, bookmark_url, lang, tts_engine, voice, now)
+    columns = "(id, bookmark_id, bookmark_title, bookmark_url, lang, tts_engine, voice, created_at)"
     async with _connect() as db:
+        if only_if_idle:
+            cur = await db.execute(
+                f"INSERT INTO jobs {columns} SELECT ?, ?, ?, ?, ?, ?, ?, ? "
+                "WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE bookmark_id = ? AND status IN (?, ?))",
+                (*values, bookmark_id, JobStatus.pending, JobStatus.processing),
+            )
+            if cur.rowcount == 0:
+                return None
+        else:
+            await db.execute(f"INSERT INTO jobs {columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?)", values)
         await db.execute(
-            "INSERT INTO jobs "
-            "(id, bookmark_id, bookmark_title, bookmark_url, lang, tts_engine, voice, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (job_id, bookmark_id, bookmark_title, bookmark_url, lang, tts_engine, voice, _now()),
+            "INSERT OR IGNORE INTO queued_bookmarks (bookmark_id, first_queued_at) VALUES (?, ?)",
+            (bookmark_id, now),
         )
     return await get_job(job_id)
 
@@ -132,21 +175,34 @@ async def get_jobs(job_ids: list[str]) -> list[dict]:
 _ORDER_BY = "ORDER BY created_at DESC, rowid DESC"
 
 
-async def list_jobs(limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
-    """Return (jobs, total_count) with pagination."""
+def _status_filter(statuses: tuple[str, ...] | None) -> tuple[str, tuple]:
+    if not statuses:
+        return "", ()
+    return f"WHERE status IN ({', '.join('?' * len(statuses))})", tuple(statuses)
+
+
+async def list_jobs(
+    limit: int = 50, offset: int = 0, statuses: tuple[str, ...] | None = None
+) -> tuple[list[dict], int]:
+    """Return (jobs, total_count) with pagination, optionally only some statuses."""
+    where, params = _status_filter(statuses)
     async with _connect() as db:
-        async with db.execute("SELECT COUNT(*) FROM jobs") as cur:
+        async with db.execute(f"SELECT COUNT(*) FROM jobs {where}", params) as cur:
             row = await cur.fetchone()
             total = row[0] if row else 0
         async with db.execute(
-            f"SELECT * FROM jobs {_ORDER_BY} LIMIT ? OFFSET ?",
-            (limit, max(0, offset)),
+            f"SELECT * FROM jobs {where} {_ORDER_BY} LIMIT ? OFFSET ?",
+            (*params, limit, max(0, offset)),
         ) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows], total
 
 
 _UPDATABLE_COLUMNS = frozenset({"status", "audio_path", "error_msg", "attempts"})
+
+# Jobs the Jobs page shows. A completed job is the bookmark's audio, which the
+# Bookmarks page shows instead.
+OPEN_STATUSES = (JobStatus.pending, JobStatus.processing, JobStatus.failed)
 
 
 async def update_job(job_id: str, **kwargs):
@@ -160,17 +216,37 @@ async def update_job(job_id: str, **kwargs):
         await db.execute(f"UPDATE jobs SET {sets} WHERE id = ?", values)
 
 
-async def delete_job(job_id: str) -> dict | None:
+async def delete_job(job_id: str, statuses: tuple[str, ...] | None = None) -> dict | None:
+    """Delete a job, optionally only while it has one of `statuses`; returns the row."""
+    where = f" AND status IN ({', '.join('?' * len(statuses))})" if statuses else ""
     async with _connect() as db:
-        async with db.execute("DELETE FROM jobs WHERE id = ? RETURNING *", (job_id,)) as cur:
+        async with db.execute(
+            f"DELETE FROM jobs WHERE id = ?{where} RETURNING *", (job_id, *(statuses or ()))
+        ) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
 
 
-async def list_job_ids() -> list[str]:
-    """Return every job id, unpaginated (used for "select all" bulk actions)."""
+async def delete_jobs(job_ids: list[str], statuses: tuple[str, ...] | None = None) -> list[dict]:
+    """Delete several jobs, optionally only those with one of `statuses`; returns the rows."""
+    where = f" AND status IN ({', '.join('?' * len(statuses))})" if statuses else ""
+    deleted: list[dict] = []
     async with _connect() as db:
-        async with db.execute(f"SELECT id FROM jobs {_ORDER_BY}") as cur:
+        for chunk in _chunks(list(dict.fromkeys(job_ids))):
+            placeholders = ", ".join("?" * len(chunk))
+            async with db.execute(
+                f"DELETE FROM jobs WHERE id IN ({placeholders}){where} RETURNING *",
+                (*chunk, *(statuses or ())),
+            ) as cur:
+                deleted.extend(dict(r) for r in await cur.fetchall())
+    return deleted
+
+
+async def list_job_ids(statuses: tuple[str, ...] | None = None) -> list[str]:
+    """Return every job id, unpaginated (used for "select all" bulk actions)."""
+    where, params = _status_filter(statuses)
+    async with _connect() as db:
+        async with db.execute(f"SELECT id FROM jobs {where} {_ORDER_BY}", params) as cur:
             rows = await cur.fetchall()
             return [row[0] for row in rows]
 
@@ -251,3 +327,172 @@ async def claim_next_pending_job(max_concurrent: int) -> dict | None:
         ) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
+
+
+# ── Per-bookmark views ─────────────────────────────────────────────────────────
+
+# SQLite caps the number of bound parameters per statement; stay well under it.
+_ID_CHUNK = 500
+
+
+def _chunks(ids: list[str]) -> list[list[str]]:
+    unique = list(dict.fromkeys(ids))
+    return [unique[i : i + _ID_CHUNK] for i in range(0, len(unique), _ID_CHUNK)]
+
+
+async def latest_jobs_by_bookmark(bookmark_ids: list[str]) -> dict[str, dict]:
+    """The most recent job of any status for each bookmark that has one."""
+    latest: dict[str, dict] = {}
+    async with _connect() as db:
+        for chunk in _chunks(bookmark_ids):
+            placeholders = ", ".join("?" * len(chunk))
+            async with db.execute(
+                f"SELECT * FROM jobs WHERE bookmark_id IN ({placeholders}) "
+                "ORDER BY created_at, rowid",
+                tuple(chunk),
+            ) as cur:
+                for row in await cur.fetchall():
+                    latest[row["bookmark_id"]] = dict(row)
+    return latest
+
+
+async def audio_by_bookmark(bookmark_ids: list[str] | None = None) -> dict[str, dict]:
+    """The newest completed job with audio for each bookmark.
+
+    With no ids, covers every bookmark that has audio.
+    """
+    base = (
+        "SELECT * FROM jobs WHERE status = 'completed' "
+        "AND audio_path IS NOT NULL AND audio_path != ''"
+    )
+    order = " ORDER BY created_at, rowid"
+    audio: dict[str, dict] = {}
+    async with _connect() as db:
+        if bookmark_ids is None:
+            async with db.execute(base + order) as cur:
+                rows = await cur.fetchall()
+        else:
+            rows = []
+            for chunk in _chunks(bookmark_ids):
+                placeholders = ", ".join("?" * len(chunk))
+                async with db.execute(
+                    f"{base} AND bookmark_id IN ({placeholders}){order}", tuple(chunk)
+                ) as cur:
+                    rows.extend(await cur.fetchall())
+    for row in rows:
+        audio[row["bookmark_id"]] = dict(row)
+    return audio
+
+
+async def delete_completed_jobs(bookmark_ids: list[str]) -> list[dict]:
+    """Delete the completed jobs (the audio) of these bookmarks; returns the rows."""
+    deleted: list[dict] = []
+    async with _connect() as db:
+        for chunk in _chunks(bookmark_ids):
+            placeholders = ", ".join("?" * len(chunk))
+            async with db.execute(
+                f"DELETE FROM jobs WHERE status = 'completed' "
+                f"AND bookmark_id IN ({placeholders}) RETURNING *",
+                tuple(chunk),
+            ) as cur:
+                deleted.extend(dict(r) for r in await cur.fetchall())
+    return deleted
+
+
+async def delete_superseded_audio(bookmark_id: str) -> list[dict]:
+    """Keep only the latest completed job of a bookmark; returns the deleted rows.
+
+    The survivor is picked in SQL rather than passed in, so two completions for
+    one bookmark finishing together agree on it instead of deleting each other.
+    """
+    async with _connect() as db:
+        async with db.execute(
+            "DELETE FROM jobs WHERE status = 'completed' AND bookmark_id = ? AND id != ("
+            "  SELECT id FROM jobs WHERE status = 'completed' AND bookmark_id = ?"
+            "  ORDER BY updated_at DESC, rowid DESC LIMIT 1"
+            ") RETURNING *",
+            (bookmark_id, bookmark_id),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def delete_failed_jobs(bookmark_ids: list[str]) -> int:
+    """Drop the failed jobs of bookmarks that are being queued again."""
+    deleted = 0
+    async with _connect() as db:
+        for chunk in _chunks(bookmark_ids):
+            placeholders = ", ".join("?" * len(chunk))
+            cur = await db.execute(
+                f"DELETE FROM jobs WHERE status = 'failed' AND bookmark_id IN ({placeholders})",
+                tuple(chunk),
+            )
+            deleted += cur.rowcount
+    return deleted
+
+
+async def retry_job(job_id: str) -> dict | None:
+    """Send a failed job back to the queue with a fresh attempt budget."""
+    async with _connect() as db:
+        async with db.execute(
+            "UPDATE jobs SET status = ?, error_msg = NULL, attempts = 0, updated_at = ? "
+            "WHERE id = ? AND status = ? RETURNING *",
+            (JobStatus.pending, _now(), job_id, JobStatus.failed),
+        ) as cur:
+            row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+# ── Auto generation bookkeeping ────────────────────────────────────────────────
+
+
+async def auto_excluded_ids() -> set[str]:
+    async with _connect() as db:
+        async with db.execute("SELECT bookmark_id FROM auto_excluded") as cur:
+            return {row[0] for row in await cur.fetchall()}
+
+
+async def set_auto_excluded(bookmark_ids: list[str], excluded: bool) -> None:
+    async with _connect() as db:
+        for chunk in _chunks(bookmark_ids):
+            if excluded:
+                now = _now()
+                await db.executemany(
+                    "INSERT OR IGNORE INTO auto_excluded (bookmark_id, created_at) VALUES (?, ?)",
+                    [(bid, now) for bid in chunk],
+                )
+            else:
+                placeholders = ", ".join("?" * len(chunk))
+                await db.execute(
+                    f"DELETE FROM auto_excluded WHERE bookmark_id IN ({placeholders})",
+                    tuple(chunk),
+                )
+
+
+async def queued_bookmark_ids() -> set[str]:
+    """Every bookmark a job was ever queued for."""
+    async with _connect() as db:
+        async with db.execute("SELECT bookmark_id FROM queued_bookmarks") as cur:
+            return {row[0] for row in await cur.fetchall()}
+
+
+# ── Settings ───────────────────────────────────────────────────────────────────
+
+
+async def get_settings() -> dict[str, str]:
+    async with _connect() as db:
+        async with db.execute("SELECT key, value FROM settings") as cur:
+            return {row[0]: row[1] for row in await cur.fetchall()}
+
+
+async def set_settings(values: dict[str, str | None]) -> None:
+    """Upsert settings; a None value removes the key."""
+    async with _connect() as db:
+        for key, value in values.items():
+            if value is None:
+                await db.execute("DELETE FROM settings WHERE key = ?", (key,))
+            else:
+                await db.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, value),
+                )

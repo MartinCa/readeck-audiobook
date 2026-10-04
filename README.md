@@ -2,12 +2,15 @@
 
 A lightweight web app that converts your [Readeck](https://readeck.org) bookmarks into MP3 audiobooks using text-to-speech.
 
-Browse your Readeck library, select articles, queue them for audio generation, and download the resulting MP3 files — all from a simple web UI.
+Browse your Readeck library, select articles, queue them for audio generation, and listen to or download the resulting MP3 right on the bookmark — or let a schedule generate audio for new articles automatically.
 
 ## Features
 
-- Paginated, searchable bookmark browser synced from your Readeck instance
-- Background TTS job queue with live status polling
+- Paginated, searchable bookmark browser for your Readeck instance, showing each article's publish date and the date it was added to Readeck
+- Filters: has audio or not, excluded from auto generation or not, and optional start/end dates for when an article was published and when it was added to Readeck
+- Finished audio lives on its bookmark, with a player and a download link; bulk-delete audio or bulk-exclude bookmarks from auto generation
+- Optional **auto audio generation** on a cron schedule (see below)
+- Background TTS job queue; the Jobs page shows what is queued, generating or failed, updated live
 - Two TTS backends:
   - **edge-tts** (default) — Microsoft neural voices, no API key, ~200 MB Docker image
   - **kokoro** (optional) — small local neural model, runs in-process, no API key, English only for now
@@ -73,7 +76,9 @@ All settings are passed as environment variables (or via `.env`).
 | `SHUTDOWN_GRACE_SECONDS` | No | `30` | How long shutdown waits for in-flight jobs |
 | `AUTH_USERNAME` | No | — | Enables HTTP basic auth (with `AUTH_PASSWORD`) |
 | `AUTH_PASSWORD` | No | — | Enables HTTP basic auth (with `AUTH_USERNAME`) |
-| `TRUSTED_ORIGINS` | No | — | Extra comma-separated origins allowed to POST/DELETE |
+| `TRUSTED_ORIGINS` | No | — | Extra comma-separated origins allowed to POST/PUT/DELETE |
+| `TZ` | No | `UTC` | Time zone the auto generation cron schedule is read in, e.g. `Europe/Copenhagen` |
+| `FRONTEND_DIR` | No | `/app/static` | Where the built web UI is served from; only needed when running outside Docker |
 
 ### Language-to-voice mapping (edge-tts)
 
@@ -95,6 +100,15 @@ The voice is automatically selected based on the bookmark's `lang` field:
 | `fi` | fi-FI-NooraNeural |
 
 Any unlisted language falls back to `EDGE_TTS_VOICE`. The engine and voice are resolved once, when the job is queued, and stored on the job — so the Jobs page always reports what actually ran.
+
+## Auto audio generation
+
+Turn it on under **Settings** in the web UI (it is off by default; the settings live in the database, not the environment):
+
+- **Schedule** — a cron expression (default `0 * * * *`, hourly), read in the container's time zone (`TZ`). On each run the app asks Readeck for articles and queues the ones that need audio.
+- **Only articles added on or after** — optional. Leave it empty to generate audio for every existing article as well as new ones; set a date to leave older articles alone.
+
+A run queues an article only if it has never had a job before and is not excluded, so each article is picked up once: deleting its audio, or a failed job, does not make the next run try again (use **Generate audio** or **Retry** for that). Videos and pictures are skipped. To keep particular bookmarks out, select them on the Bookmarks page and choose **Exclude from auto generation**. **Run now** on the Settings page does a run immediately.
 
 ## Output files
 
@@ -156,38 +170,38 @@ docker build -f Dockerfile.kokoro --build-arg KOKORO_ACCEL=cuda -t readeck-audio
 ```
 readeck-audiobook/
 ├── app/
-│   ├── main.py        # FastAPI routes, middleware and lifespan
+│   ├── main.py        # FastAPI JSON API, middleware, lifespan, serves the web UI
 │   ├── config.py      # Environment-driven settings
+│   ├── schemas.py     # API request/response models (camelCase on the wire)
+│   ├── bookmarks.py   # Bookmark listing: Readeck + local audio/exclusion filters
+│   ├── autogen.py     # Auto audio generation settings and cron scheduler
 │   ├── readeck.py     # Readeck API client (pooled httpx)
 │   ├── tts.py         # Text cleaning, filenames, TTS backends
-│   ├── jobs.py        # Background worker loop
-│   ├── models.py      # SQLite schema and queries (aiosqlite)
-│   └── templates/     # Jinja2 HTML templates
-│       ├── base.html
-│       ├── _pagination.html
-│       ├── index.html # Bookmark browser
-│       └── jobs.html  # Job list with live status polling
-├── static/
-│   ├── app.css
-│   └── vendor/        # Vendored Alpine.js (no CDN at runtime)
+│   ├── jobs.py        # Queueing and the background worker loop
+│   └── models.py      # SQLite schema and queries (aiosqlite)
+├── frontend/          # React + TypeScript web UI (MartinCa/frontend-kit conventions)
+│   ├── DESIGN.md      # Frontend rules; section 9 is this project's
+│   ├── openapi.json   # API spec the TypeScript types are generated from
+│   └── src/
+├── scripts/export_openapi.py
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt
 ```
 
-**Stack:** Python 3.12+ · FastAPI · Jinja2 · Alpine.js · SQLite · edge-tts
+**Stack:** Python 3.12+ · FastAPI · SQLite · edge-tts — React · TypeScript · Vite · TanStack Router/Query · shadcn/ui (Base UI) · Tailwind, following [MartinCa/frontend-kit](https://github.com/MartinCa/frontend-kit). The Docker images build the web UI in a Node stage and serve it from FastAPI; nothing is fetched from a CDN at runtime.
 
 Both images build on Python 3.14. CI runs the suite on 3.12 (the declared minimum) and 3.14.
 
 **How a job flows:**
 
-1. User selects bookmarks on the Bookmarks page and clicks **Generate audio**
+1. User selects bookmarks on the Bookmarks page and clicks **Generate audio** (or the auto generation schedule picks them up)
 2. The selected bookmarks are fetched from Readeck concurrently, and a `Job` row is inserted per bookmark with `status=pending`, recording the article's language and the engine/voice resolved from it
 3. The background worker atomically claims pending jobs (up to `MAX_CONCURRENT_JOBS` at a time) and marks them `processing`
 4. The worker fetches the article text (Markdown preferred, HTML fallback) and strips markup down to speakable prose
 5. The recorded TTS engine synthesises the audio in chunks, retrying failures, and writes an MP3 to `AUDIO_DIR` via a temp file so a crash cannot leave a truncated download
-6. The job is marked `completed` with an `audio_path`; the Jobs page shows a download link
-7. The Jobs page polls all active jobs in one request every 4 seconds and updates them in place
+6. The job is marked `completed` with an `audio_path`, replacing any earlier audio for that bookmark; the bookmark now shows a player and a download link, and the job leaves the Jobs page
+7. While a job is queued or generating, the Bookmarks and Jobs pages refresh their list in one request every 4 seconds
 
 If the process dies mid-job, the interrupted job returns to `pending` on the next boot (up to `MAX_JOB_ATTEMPTS`), and any orphaned audio files are cleaned up.
 
@@ -207,12 +221,32 @@ mkdir -p audio data
 uvicorn app.main:app --reload --port 8080
 ```
 
+The web UI lives in `frontend/` (Node 24, pnpm). In a second terminal, run the Vite dev server, which proxies `/api` to the backend on port 8080, and open http://localhost:5173:
+
+```sh
+cd frontend
+pnpm install
+pnpm dev
+```
+
+To serve a production build from FastAPI instead, run `pnpm build` and start uvicorn with `FRONTEND_DIR=frontend/dist`.
+
+After changing an API endpoint or schema, regenerate the spec and the frontend's types (a test fails until you do):
+
+```sh
+python scripts/export_openapi.py
+cd frontend && pnpm generate:api-types
+```
+
 Lint and test:
 
 ```sh
 ruff check .        # lint
 ruff format .       # format
 pytest              # run all tests
+
+cd frontend
+pnpm run lint && pnpm run format-check && pnpm exec tsc -b && pnpm test
 ```
 
 ### Git hooks
@@ -232,25 +266,31 @@ image; if `lefthook` is not on `PATH`, they should report this to the user (see
 `AGENTS.md`).
 
 Pre-commit runs `uvx ruff check --fix` and `uvx ruff format` on staged Python
-(re-staging fixes), a `betterleaks` secret scan of the staged diff, and a
-`zizmor` audit of staged workflow files; commit-msg enforces Conventional
-Commits; pre-push runs the test suite (`uv run pytest`). `lefthook`,
+and ESLint + Prettier on staged frontend files (re-staging fixes), a
+`betterleaks` secret scan of the staged diff, and a `zizmor` audit of staged
+workflow files; commit-msg enforces Conventional Commits; pre-push runs both
+test suites (`uv run pytest`, `pnpm test`). `lefthook`, `pnpm`,
 `betterleaks`, and `zizmor` must be on `PATH`, and
 `LEFTHOOK=0 git commit` skips the hooks as a last resort. See `AGENTS.md` for
 the exact hooks-vs-CI enforcement split.
 
 ## HTTP endpoints
 
+The API is JSON with camelCase fields; errors are `application/problem+json`. The full spec is at `/docs` on a running instance and in `frontend/openapi.json`.
+
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/` | Bookmark browser (paginated, searchable) |
-| `GET` | `/jobs` | Job list with status and download links |
-| `POST` | `/jobs` | Queue bookmarks for audio generation |
-| `DELETE` | `/jobs/{id}` | Delete a job and its audio file |
-| `POST` | `/jobs/bulk-delete` | Delete several jobs at once |
-| `GET` | `/audio/{filename}` | Download generated MP3 |
-| `GET` | `/api/jobs/{id}/status` | Poll a single job's status (JSON) |
-| `GET` | `/api/jobs/statuses?ids=…` | Poll many jobs in one request (JSON) |
-| `GET` | `/api/jobs` | List jobs, paginated (JSON) |
-| `GET` | `/api/jobs/ids` | Every job id, for "select all" (JSON) |
+| `GET` | `/api/bookmarks` | Bookmarks with their audio and job state; `page`, `search`, `audio` (`with`/`without`), `autoGeneration` (`excluded`/`included`), `addedFrom`, `addedTo`, `publishedFrom`, `publishedTo` (`YYYY-MM-DD`) |
+| `POST` | `/api/bookmarks/audio/delete` | Delete the audio of several bookmarks |
+| `PUT` | `/api/bookmarks/auto-generation` | Exclude bookmarks from, or include them in, auto generation |
+| `POST` | `/api/jobs` | Queue bookmarks for audio generation |
+| `GET` | `/api/jobs` | Queued, generating and failed jobs, paginated |
+| `GET` | `/api/jobs/ids` | Every such job id, for "select all" |
+| `GET` | `/api/jobs/{id}` | One job |
+| `POST` | `/api/jobs/{id}/retry` | Queue a failed job again |
+| `DELETE` | `/api/jobs/{id}` | Delete a job and its audio file |
+| `POST` | `/api/jobs/bulk-delete` | Delete several jobs at once |
+| `GET` / `PUT` | `/api/settings` | Auto generation settings and its last/next run |
+| `POST` | `/api/auto-generation/run` | Run auto generation now |
+| `GET` | `/api/audio/{filename}` | Download generated MP3 |
 | `GET` | `/health` | Health check |

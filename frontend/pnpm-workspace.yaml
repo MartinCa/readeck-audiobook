@@ -1,0 +1,22 @@
+# pnpm 11 turns supply-chain protection on by default: minimumReleaseAge is
+# 1440 minutes (0 before v11), so any lockfile entry published in the last day
+# is rejected at install time. That fails the Docker build on transitive
+# versions nobody chose deliberately.
+#
+# minimumReleaseAge itself is deliberately NOT set here. It would apply to
+# pnpm 10 too, where it defaults to 0 and where trustLockfile does not exist
+# (11.3+) — enabling the policy without the escape hatch would block lockfile
+# updates on the current pnpm. Let each version use its own default.
+
+# Skip re-verifying a lockfile that is already committed and reviewed. The
+# policy still applies when the lockfile is written, which is where it does the
+# real work; re-checking every entry on each CI install is what breaks builds.
+# pnpm's caveat is that a lockfile authored under a weaker local policy can slip
+# through, so this is only reasonable while no outside collaborators can edit it.
+trustLockfile: true
+
+# Our own package, published from MartinCa/frontend-kit. A release is ours and
+# reviewed before it ships, so it should not have to sit in quarantine for a day
+# before a project can pick it up.
+minimumReleaseAgeExclude:
+  - "@martinrun/*"

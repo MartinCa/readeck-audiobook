@@ -149,3 +149,46 @@ async def test_article_fetch_failure_raises_a_readeck_error():
 
 async def test_close_client_is_safe_when_none_was_created():
     await readeck.close_client()
+
+
+@respx.mock
+async def test_list_bookmarks_forwards_filters():
+    route = respx.get("http://readeck.test/api/bookmarks").mock(
+        return_value=httpx.Response(200, json=[], headers={"Total-Count": "0"})
+    )
+    await readeck.list_bookmarks(
+        range_start="2026-01-01T00:00:00Z", range_end="2026-02-01T23:59:59Z", types=("article",)
+    )
+    params = route.calls[0].request.url.params
+    assert params["range_start"] == "2026-01-01T00:00:00Z"
+    assert params["range_end"] == "2026-02-01T23:59:59Z"
+    assert params["type"] == "article"
+    assert params["sort"] == "-created"
+    assert "search" not in params
+
+
+@respx.mock
+async def test_list_all_bookmarks_reads_every_page():
+    def page(request):
+        offset = int(request.url.params["offset"])
+        assert request.url.params["limit"] == "100"
+        items = [{"id": f"b{i}"} for i in range(offset, min(offset + 100, 250))]
+        return httpx.Response(200, json=items, headers={"Total-Count": "250"})
+
+    route = respx.get("http://readeck.test/api/bookmarks").mock(side_effect=page)
+    items = await readeck.list_all_bookmarks(search="x")
+    assert [b["id"] for b in items] == [f"b{i}" for i in range(250)]
+    assert route.call_count == 3
+
+
+@respx.mock
+async def test_list_all_bookmarks_drops_a_duplicate_from_a_shifted_page():
+    pages = {0: [{"id": "a"}, {"id": "b"}], 2: [{"id": "b"}, {"id": "c"}]}
+
+    def page(request):
+        offset = int(request.url.params["offset"])
+        return httpx.Response(200, json=pages[offset // 50], headers={"Total-Count": "150"})
+
+    respx.get("http://readeck.test/api/bookmarks").mock(side_effect=page)
+    items = await readeck.list_all_bookmarks()
+    assert [b["id"] for b in items] == ["a", "b", "c"]

@@ -1,6 +1,6 @@
 # Readeck Audiobook — Agent Instructions
 
-AI agents should read [`CLAUDE.md`](CLAUDE.md) first: it is the canonical contributor guide for this repository (project overview, layout notes, development workflow). This file only adds the git-hooks conventions.
+AI agents should read [`CLAUDE.md`](CLAUDE.md) first: it is the canonical contributor guide for this repository (project overview, layout notes, development workflow). For UI work, also read [`frontend/AGENTS.md`](frontend/AGENTS.md) and [`frontend/DESIGN.md`](frontend/DESIGN.md). This file only adds the git-hooks conventions.
 
 ## Git hooks
 
@@ -19,10 +19,10 @@ lefthook install                  # idempotent, safe to re-run
 
 The hooks run:
 
-- **pre-commit** — `langs/python.yml` lints and formats staged `*.py`/`*.pyi` files (`uvx ruff check --fix` + `uvx ruff format`, re-staging fixes via `stage_fixed`); `lefthook-shared.yml` scans the staged diff with `betterleaks` (blocks the commit on a leak) and audits staged `.github/workflows/*` files with `zizmor` (blocks on a finding).
+- **pre-commit** — `langs/python.yml` lints and formats staged `*.py`/`*.pyi` files (`uvx ruff check --fix` + `uvx ruff format`, re-staging fixes via `stage_fixed`); `langs/ts.yml` runs ESLint `--fix` + Prettier on staged frontend files, rooted at `frontend/` by `lefthook-local.yml`; `lefthook-shared.yml` scans the staged diff with `betterleaks` (blocks the commit on a leak) and audits staged `.github/workflows/*` files with `zizmor` (blocks on a finding).
 - **commit-msg** — `commit-msg.yml` enforces [Conventional Commits](https://www.conventionalcommits.org/), e.g. `feat: ...`, `fix(api): ...`.
-- **pre-push** — `pre-push-python.yml` runs the test suite (`uv run pytest`) before every push, blocking the push on any failure.
+- **pre-push** — `pre-push-python.yml` runs the test suite (`uv run pytest`) and `pre-push-ts.yml` the frontend suite (`pnpm test` in `frontend/`) before every push, blocking the push on any failure.
 
 Three tools must be on `PATH` for the hooks: `lefthook`, `betterleaks` (secret scan), and `zizmor` (workflow audit). If a tool is missing, `LEFTHOOK=0 git commit` skips the hooks entirely — a pragmatic escape hatch for restricted setups, not a way to dodge the gates.
 
-Hooks vs CI: `ci.yml` runs `ruff check` and `ruff format --check`, `pytest`, Docker builds, plus a `zizmor` job (`uvx zizmor@1.29.0 --format sarif .`) that shows on PRs and uploads a SARIF report to code scanning — SARIF mode exits 0 on findings by design, so that job cannot fail them; findings surface in code scanning. `betterleaks` and the commit-msg validation run **only** as local hooks (no CI equivalent), so do not bypass them.
+Hooks vs CI: `ci.yml` runs `ruff check` and `ruff format --check`, `pytest`, the frontend's lint, format check, type check and tests, Docker builds, plus a `zizmor` job (`uvx zizmor@1.29.0 --format sarif .`) that shows on PRs and uploads a SARIF report to code scanning — SARIF mode exits 0 on findings by design, so that job cannot fail them; findings surface in code scanning. `betterleaks` and the commit-msg validation run **only** as local hooks (no CI equivalent), so do not bypass them.

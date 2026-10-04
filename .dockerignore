@@ -20,3 +20,8 @@ CLAUDE.md
 docker-compose*.yml
 .mcp.json
 renovate.json
+frontend/node_modules/
+frontend/dist/
+.claude/
+.opencode/
+scripts/
