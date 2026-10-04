@@ -66,7 +66,6 @@ async def list_bookmarks(filters: BookmarkFilters, page: int, page_size: int) ->
     ids = [bm["id"] for bm in items]
     audio = await models.audio_by_bookmark(ids)
     latest = await models.latest_jobs_by_bookmark(ids)
-    excluded = await models.auto_excluded_ids()
     return {
         "items": [
             {
@@ -78,7 +77,7 @@ async def list_bookmarks(filters: BookmarkFilters, page: int, page_size: int) ->
                 "job": job
                 if (job := latest.get(bm["id"])) and job["status"] != "completed"
                 else None,
-                "auto_excluded": bm["id"] in excluded,
+                "auto_excluded": bool(bm["auto_excluded"]),
             }
             for bm in items
         ],

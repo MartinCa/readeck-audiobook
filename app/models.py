@@ -610,6 +610,8 @@ async def query_bookmarks(
 ) -> tuple[list[dict], int]:
     """A page of visible bookmarks, newest first, and the total that match.
 
+    Each row carries `auto_excluded` (0 or 1) alongside the bookmark columns.
+
     `created_*` compare full timestamps; `published_*` compare the UTC day
     (YYYY-MM-DD) and leave out bookmarks with no publication date.
     """
@@ -641,7 +643,7 @@ async def query_bookmarks(
         async with db.execute(f"SELECT COUNT(*) FROM bookmarks b WHERE {clause}", params) as cur:
             total = (await cur.fetchone())[0]
         async with db.execute(
-            f"SELECT b.* FROM bookmarks b WHERE {clause} "
+            f"SELECT b.*, {_IS_EXCLUDED} AS auto_excluded FROM bookmarks b WHERE {clause} "
             "ORDER BY b.created DESC, b.id LIMIT ? OFFSET ?",
             (*params, limit, offset),
         ) as cur:

@@ -152,7 +152,11 @@ async def run_once() -> SyncState | None:
         raise
     finally:
         _running = False
-        await _save_state(state)
+        try:
+            await _save_state(state)
+        except Exception:
+            # Raising here would replace the sync's own error, if it had one.
+            logger.exception("Could not record the Readeck sync result")
 
 
 async def _run_logged() -> None:

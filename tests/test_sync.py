@@ -172,3 +172,13 @@ async def test_the_schedule_uses_the_saved_cron():
     assert await sync.schedule.cron() == sync.DEFAULT_CRON
     await sync.save_cron("0 * * * *")
     assert await sync.schedule.cron() == "0 * * * *"
+
+
+async def test_a_failed_state_write_does_not_hide_the_sync_error(remote, monkeypatch):
+    monkeypatch.setattr(
+        readeck, "sync_list", AsyncMock(side_effect=readeck.ReadeckError("Readeck is down"))
+    )
+    monkeypatch.setattr(sync, "_save_state", AsyncMock(side_effect=RuntimeError("locked")))
+    with pytest.raises(readeck.ReadeckError, match="Readeck is down"):
+        await sync.run_once()
+    assert not sync.is_running()
