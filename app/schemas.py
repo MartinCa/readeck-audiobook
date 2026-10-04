@@ -54,7 +54,7 @@ class JobProgress(ApiModel):
 
     @classmethod
     def from_row(cls, row: dict) -> "JobProgress | None":
-        if row.get("status") != "processing" or not row.get("progress_total"):
+        if row.get("status") != "processing" or row.get("progress_total") is None:
             return None
         return cls(done=row["progress_done"] or 0, total=row["progress_total"])
 

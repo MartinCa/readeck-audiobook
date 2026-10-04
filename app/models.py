@@ -355,6 +355,8 @@ async def claim_next_pending_job(max_concurrent: int) -> dict | None:
             """
             UPDATE jobs
                SET status = 'processing', updated_at = ?, attempts = attempts + 1,
+                   -- The one place progress is reset: retries and requeues
+                   -- leave it stale, and only a running job's is shown.
                    progress_done = NULL, progress_total = NULL
              WHERE id = (
                  SELECT id FROM jobs
