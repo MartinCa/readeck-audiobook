@@ -292,3 +292,15 @@ class TestAudioReplacement:
         monkeypatch.setattr(jobs.tts, "generate_audio", _writes(audio_dir / "new.mp3"))
         await jobs._process_job(claimed)
         assert await models.get_job(other["id"])
+
+
+class TestQueueBookmarks:
+    async def test_concurrent_callers_queue_a_bookmark_once(self, monkeypatch):
+        async def slow_fetch(ids):
+            await asyncio.sleep(0.01)  # let the other caller pass the pre-check
+            return {bid: {"title": bid} for bid in ids}
+
+        monkeypatch.setattr(jobs.readeck, "get_bookmarks", slow_fetch)
+        results = await asyncio.gather(jobs.queue_bookmarks(["bm1"]), jobs.queue_bookmarks(["bm1"]))
+        assert sorted(results) == [(0, 1), (1, 0)]
+        assert len(await models.list_job_ids()) == 1

@@ -23,6 +23,8 @@ export function AutoGenerationForm({ status }: { status: AutoGenerationStatus })
   const form = useForm<FormValues>({
     resolver: zodResolver(autoGenerationSchema),
     values: { enabled: status.enabled, since: status.since ?? "", cron: status.cron },
+    // A refetch (say after Run now) must not wipe a change not yet saved.
+    resetOptions: { keepDirtyValues: true },
   });
   const cron = useWatch({ control: form.control, name: "cron" });
   const since = useWatch({ control: form.control, name: "since" });

@@ -282,8 +282,12 @@ async def delete_job(job_id: str):
 
 @app.post("/api/jobs/bulk-delete", response_model=CountResult)
 async def bulk_delete_jobs(body: JobIds):
+    # Only open jobs: one that completed since the list was loaded is now a
+    # bookmark's audio, which this action must not take away.
     deleted = [
-        job for job_id in dict.fromkeys(body.job_ids) if (job := await models.delete_job(job_id))
+        job
+        for job_id in dict.fromkeys(body.job_ids)
+        if (job := await models.delete_job(job_id, statuses=models.OPEN_STATUSES))
     ]
     jobs.remove_audio_files(deleted)
     return CountResult(count=len(deleted))
@@ -297,7 +301,7 @@ async def _settings_response() -> Settings:
     state = await autogen.load_run_state()
     next_run = None
     if current.enabled and autogen.valid_cron(current.cron):
-        next_run = autogen.scheduled_next_run() or autogen.next_run(current.cron)
+        next_run = autogen.scheduled_next_run(current.cron) or autogen.next_run(current.cron)
     return Settings(
         auto_generation=AutoGenerationStatus(
             enabled=current.enabled,
@@ -377,13 +381,15 @@ async def frontend(path: str):
     if path:
         candidate = (root / path).resolve()
         if root in candidate.parents and candidate.is_file():
-            return FileResponse(candidate)
+            # The app shell names the hashed asset files of the current
+            # build, so it must never be cached, whichever path serves it.
+            headers = {"Cache-Control": "no-cache"} if candidate.name == "index.html" else None
+            return FileResponse(candidate, headers=headers)
     index = root / "index.html"
     if not index.is_file():
         raise HTTPException(
             status_code=404,
             detail="The frontend has not been built; run `pnpm build` in frontend/",
         )
-    # Client-side routes all resolve to the app shell, which must never be
-    # cached: it names the hashed asset files of the current build.
+    # Client-side routes all resolve to the app shell.
     return FileResponse(index, headers={"Cache-Control": "no-cache"})

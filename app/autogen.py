@@ -126,9 +126,15 @@ _poke = asyncio.Event()
 _next: tuple[str, datetime] | None = None
 
 
-def scheduled_next_run() -> datetime | None:
-    """When the scheduler will next run, if it is enabled and has planned one."""
-    return _next[1] if _next else None
+def scheduled_next_run(cron: str | None = None) -> datetime | None:
+    """When the scheduler will next run, if it is enabled and has planned one.
+
+    With `cron`, a plan made for a different expression is ignored: just after
+    the schedule is changed the scheduler has not replanned yet.
+    """
+    if not _next or (cron is not None and _next[0] != cron):
+        return None
+    return _next[1]
 
 
 async def _tick() -> None:

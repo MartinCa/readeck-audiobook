@@ -40,7 +40,7 @@ async def _process_job(job: dict):
         )
         logger.info("Job %s completed: %s", job_id, audio_path.name)
         # A bookmark has one audio file: a regeneration replaces the old one.
-        superseded = await models.delete_completed_jobs([job["bookmark_id"]], keep_job_id=job_id)
+        superseded = await models.delete_superseded_audio(job["bookmark_id"])
         remove_audio_files(superseded)
     except asyncio.CancelledError:
         # Shutdown: hand the job back to the queue so the next boot resumes it.
@@ -75,7 +75,6 @@ async def queue_bookmarks(
     # De-duplicate while preserving order; a double submit can repeat ids.
     unique_ids = list(dict.fromkeys(bookmark_ids))
     queued_ids = [bid for bid in unique_ids if not await models.get_active_job_for_bookmark(bid)]
-    skipped = len(unique_ids) - len(queued_ids)
 
     bookmarks = dict(prefetched or {})
     # One concurrent fetch for the whole batch rather than a sequential round
@@ -85,19 +84,25 @@ async def queue_bookmarks(
     # A new attempt replaces an earlier failure rather than piling up beside it.
     await models.delete_failed_jobs(queued_ids)
 
+    queued = 0
     for bid in queued_ids:
         bm = bookmarks.get(bid, {})
         lang = bm.get("lang") or ""
         engine, voice = tts.resolve_engine_and_voice(lang)
-        await models.create_job(
+        # The check above is a cheap pre-filter; the insert re-checks
+        # atomically in case another caller (say the auto generation
+        # scheduler) queued the same bookmark in the meantime.
+        job = await models.create_job(
             bookmark_id=bid,
             bookmark_title=bm.get("title") or bid,
             bookmark_url=bm.get("url") or "",
             lang=lang,
             tts_engine=engine,
             voice=voice,
+            only_if_idle=True,
         )
-    return len(queued_ids), skipped
+        queued += job is not None
+    return queued, len(unique_ids) - queued
 
 
 def _spawn(job: dict) -> asyncio.Task:

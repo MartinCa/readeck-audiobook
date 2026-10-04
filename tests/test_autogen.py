@@ -150,6 +150,13 @@ class TestScheduler:
         await autogen._tick()
         assert autogen._next[0] == "*/5 * * * *"
 
+    async def test_a_plan_for_an_old_cron_is_not_reported(self, monkeypatch):
+        monkeypatch.setattr(autogen, "run_once", AsyncMock())
+        await autogen.save_settings(autogen.AutoGenSettings(enabled=True, cron="0 3 * * *"))
+        await autogen._tick()
+        assert autogen.scheduled_next_run("0 3 * * *") is not None
+        assert autogen.scheduled_next_run("*/5 * * * *") is None
+
     async def test_a_failed_run_does_not_stop_the_scheduler(self, monkeypatch):
         monkeypatch.setattr(autogen, "run_once", AsyncMock(side_effect=RuntimeError("down")))
         await autogen.save_settings(autogen.AutoGenSettings(enabled=True, cron="0 3 * * *"))

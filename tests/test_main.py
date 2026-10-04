@@ -372,6 +372,14 @@ async def test_bulk_delete_jobs(client):
     assert (await models.list_jobs())[1] == 0
 
 
+async def test_bulk_delete_jobs_leaves_completed_audio_alone(client):
+    done = await models.create_job("a", "A", "http://x", "edge-tts", "v")
+    await models.update_job(done["id"], status=models.JobStatus.completed, audio_path="a.mp3")
+    resp = await client.post("/api/jobs/bulk-delete", json={"jobIds": [done["id"]]})
+    assert resp.json() == {"count": 0}
+    assert await models.get_job(done["id"])
+
+
 # ── Settings and auto generation ───────────────────────────────────────────────
 
 
@@ -475,7 +483,7 @@ def built_frontend(tmp_path, monkeypatch):
 
 
 async def test_client_routes_serve_the_app_shell(client, built_frontend):
-    for path in ("/", "/jobs", "/settings"):
+    for path in ("/", "/jobs", "/settings", "/index.html"):
         resp = await client.get(path)
         assert resp.status_code == 200
         assert "id=root" in resp.text

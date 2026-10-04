@@ -118,16 +118,29 @@ async def create_job(
     tts_engine: str,
     voice: str,
     lang: str = "",
-) -> dict:
+    only_if_idle: bool = False,
+) -> dict | None:
+    """Insert a pending job and return it.
+
+    With `only_if_idle`, nothing is inserted (and None returned) when the
+    bookmark already has a pending or processing job. The check is part of the
+    INSERT, so two callers queueing the same bookmark at once cannot both win.
+    """
     job_id = str(uuid.uuid4())
     now = _now()
+    values = (job_id, bookmark_id, bookmark_title, bookmark_url, lang, tts_engine, voice, now)
+    columns = "(id, bookmark_id, bookmark_title, bookmark_url, lang, tts_engine, voice, created_at)"
     async with _connect() as db:
-        await db.execute(
-            "INSERT INTO jobs "
-            "(id, bookmark_id, bookmark_title, bookmark_url, lang, tts_engine, voice, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (job_id, bookmark_id, bookmark_title, bookmark_url, lang, tts_engine, voice, now),
-        )
+        if only_if_idle:
+            cur = await db.execute(
+                f"INSERT INTO jobs {columns} SELECT ?, ?, ?, ?, ?, ?, ?, ? "
+                "WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE bookmark_id = ? AND status IN (?, ?))",
+                (*values, bookmark_id, JobStatus.pending, JobStatus.processing),
+            )
+            if cur.rowcount == 0:
+                return None
+        else:
+            await db.execute(f"INSERT INTO jobs {columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?)", values)
         await db.execute(
             "INSERT OR IGNORE INTO queued_bookmarks (bookmark_id, first_queued_at) VALUES (?, ?)",
             (bookmark_id, now),
@@ -203,9 +216,13 @@ async def update_job(job_id: str, **kwargs):
         await db.execute(f"UPDATE jobs SET {sets} WHERE id = ?", values)
 
 
-async def delete_job(job_id: str) -> dict | None:
+async def delete_job(job_id: str, statuses: tuple[str, ...] | None = None) -> dict | None:
+    """Delete a job, optionally only while it has one of `statuses`; returns the row."""
+    where = f" AND status IN ({', '.join('?' * len(statuses))})" if statuses else ""
     async with _connect() as db:
-        async with db.execute("DELETE FROM jobs WHERE id = ? RETURNING *", (job_id,)) as cur:
+        async with db.execute(
+            f"DELETE FROM jobs WHERE id = ?{where} RETURNING *", (job_id, *(statuses or ()))
+        ) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
 
@@ -352,19 +369,36 @@ async def audio_by_bookmark(bookmark_ids: list[str] | None = None) -> dict[str, 
     return audio
 
 
-async def delete_completed_jobs(bookmark_ids: list[str], keep_job_id: str = "") -> list[dict]:
+async def delete_completed_jobs(bookmark_ids: list[str]) -> list[dict]:
     """Delete the completed jobs (the audio) of these bookmarks; returns the rows."""
     deleted: list[dict] = []
     async with _connect() as db:
         for chunk in _chunks(bookmark_ids):
             placeholders = ", ".join("?" * len(chunk))
             async with db.execute(
-                f"DELETE FROM jobs WHERE status = 'completed' AND id != ? "
+                f"DELETE FROM jobs WHERE status = 'completed' "
                 f"AND bookmark_id IN ({placeholders}) RETURNING *",
-                (keep_job_id, *chunk),
+                tuple(chunk),
             ) as cur:
                 deleted.extend(dict(r) for r in await cur.fetchall())
     return deleted
+
+
+async def delete_superseded_audio(bookmark_id: str) -> list[dict]:
+    """Keep only the latest completed job of a bookmark; returns the deleted rows.
+
+    The survivor is picked in SQL rather than passed in, so two completions for
+    one bookmark finishing together agree on it instead of deleting each other.
+    """
+    async with _connect() as db:
+        async with db.execute(
+            "DELETE FROM jobs WHERE status = 'completed' AND bookmark_id = ? AND id != ("
+            "  SELECT id FROM jobs WHERE status = 'completed' AND bookmark_id = ?"
+            "  ORDER BY updated_at DESC, rowid DESC LIMIT 1"
+            ") RETURNING *",
+            (bookmark_id, bookmark_id),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
 
 async def delete_failed_jobs(bookmark_ids: list[str]) -> int:

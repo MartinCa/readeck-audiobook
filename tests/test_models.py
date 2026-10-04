@@ -438,15 +438,19 @@ async def test_latest_jobs_by_bookmark():
     assert latest == {"a": failed}
 
 
-async def test_delete_completed_jobs_keeps_one_and_other_statuses():
+async def test_delete_superseded_audio_keeps_the_latest_completion():
     old = await _job("a", JobStatus.completed, "old.mp3")
     keep = await _job("a", JobStatus.completed, "new.mp3")
     pending = await _job("a")
+    other = await _job("b", JobStatus.completed, "b.mp3")
 
-    deleted = await models.delete_completed_jobs(["a"], keep_job_id=keep["id"])
+    deleted = await models.delete_superseded_audio("a")
     assert [d["id"] for d in deleted] == [old["id"]]
     assert await models.get_job(keep["id"])
     assert await models.get_job(pending["id"])
+    assert await models.get_job(other["id"])
+    # Running it again for the other completion agrees on the same survivor.
+    assert await models.delete_superseded_audio("a") == []
 
 
 async def test_open_statuses_leave_out_completed():
