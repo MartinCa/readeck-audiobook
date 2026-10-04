@@ -4,7 +4,7 @@
 
 A lightweight FastAPI web app that converts [Readeck](https://readeck.org) bookmarks into MP3 audiobooks via text-to-speech. See [README.md](README.md) for full documentation.
 
-**Stack:** Python 3.12+ · FastAPI · Jinja2 · Alpine.js · SQLite · edge-tts
+**Stack:** Python 3.12+ · FastAPI · SQLite · edge-tts, with a React + TypeScript web UI in `frontend/` built on [MartinCa/frontend-kit](https://github.com/MartinCa/frontend-kit) (shadcn/ui on Base UI, Tailwind, TanStack Router + Query).
 
 ## Layout notes
 
@@ -12,8 +12,13 @@ A lightweight FastAPI web app that converts [Readeck](https://readeck.org) bookm
 - Storage paths (`DATA_DIR`, `AUDIO_DIR`) are configurable and default to the container paths — never hardcode `/app/...`.
 - The engine and voice for a job are resolved once at queue time and stored on the row. The worker uses the stored values, so the UI always reports what actually ran.
 - Kokoro runs on sherpa-onnx (onnxruntime), not PyTorch. sherpa-onnx picks a speaker by integer id, so `KOKORO_VOICES` in `app/tts.py` maps the familiar names — that table is specific to the `kokoro-multi-lang-v1_0` model `Dockerfile.kokoro` bundles, so changing the model means changing the table.
-- Front-end assets are vendored in `static/vendor/`. The app makes no CDN requests at runtime; keep it that way.
-- The Jobs page polls `/api/jobs/statuses` once per interval for all active jobs and patches the DOM in place. Avoid reintroducing per-card polling or full-page reloads.
+- Before writing UI code, read `frontend/DESIGN.md` (shared frontend-kit rules; section 9 is this project's) — `.claude/skills/frontend-conventions/` carries the same rules. Never hand-edit `frontend/src/components/ui/**`, `frontend/src/lib/api-types.ts` or `frontend/src/routeTree.gen.ts`.
+- The backend is a JSON API under `/api`: camelCase on the wire (pydantic models in `app/schemas.py`), errors as `application/problem+json`. FastAPI serves the built UI from `FRONTEND_DIR` and falls back to `index.html` for client routes.
+- After changing an endpoint or schema, run `python scripts/export_openapi.py` and `pnpm generate:api-types` in `frontend/`; `tests/test_openapi.py` fails until the checked-in spec matches.
+- The app makes no CDN requests at runtime (fonts and scripts are bundled by Vite); keep it that way.
+- A completed job *is* the bookmark's audio: the Bookmarks page shows it, and the Jobs page lists only pending, processing and failed jobs. A new completion for a bookmark replaces its earlier audio.
+- Auto generation settings live in the `settings` table (edited in the UI), not the environment. A run only queues bookmarks absent from `queued_bookmarks` and `auto_excluded`, so each bookmark is picked up once.
+- Lists poll with TanStack Query's `refetchInterval`, one request for the whole page and only while a job on it is queued or generating. Avoid per-card polling.
 
 ## MCP servers
 
@@ -49,10 +54,22 @@ mkdir -p audio data
 uvicorn app.main:app --reload --port 8080
 ```
 
+Frontend (Node 24, pnpm), in a second terminal — the Vite dev server proxies `/api` to port 8080:
+
+```sh
+cd frontend && pnpm install && pnpm dev
+```
+
 ## Linting & tests
 
 ```sh
 ruff check .        # lint
 ruff format .       # format
 pytest              # run all tests
+
+cd frontend
+pnpm run lint       # ESLint, --max-warnings 0
+pnpm run format-check
+pnpm exec tsc -b    # type check
+pnpm test           # vitest
 ```

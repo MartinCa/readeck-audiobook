@@ -374,9 +374,22 @@ is ASP.NET Core, FastAPI, Flask, or a Go binary. The rules below keep it that wa
 
 *Fill this in per repo. Everything above is shared and should stay identical across projects.*
 
-- **What this app is:**
-- **Who uses it:**
-- **Router / framework choice and why:**
-- **Backend and where its OpenAPI spec lives:**
-- **Pagination convention:**
+- **What this app is:** Readeck Audiobook — turns [Readeck](https://readeck.org) bookmarks
+  into MP3s with text-to-speech. Browse and filter bookmarks, queue audio, listen to or
+  download it from the bookmark, and optionally let a cron schedule queue new articles.
+- **Who uses it:** One person on a trusted network, or behind their own authenticating
+  reverse proxy (optional HTTP basic auth). No user accounts.
+- **Router / framework choice and why:** Vite + TanStack Router (SPA). No SSR/SEO need.
+  The FastAPI backend serves the built app from the same origin and falls back to
+  `index.html` for client-side routes.
+- **Backend and where its OpenAPI spec lives:** FastAPI (Python), same origin under `/api`.
+  `scripts/export_openapi.py` writes the spec to `frontend/openapi.json`;
+  `pnpm generate:api-types` turns it into `src/lib/api-types.ts`. `tests/test_openapi.py`
+  fails when the checked-in spec no longer matches the code.
+- **Pagination convention:** `?page=N` (1-based), server-side, fixed page size. Responses are
+  `{ items, total, page, pageSize, totalPages }`.
 - **Deviations from the shared conventions (with reasons):**
+  - Lists are card lists, not TanStack Table: each row carries an audio player and
+    wrapping text, which a table cannot fit at 375px.
+  - The spec still lists FastAPI's default `HTTPValidationError` for 422s; the server
+    actually answers every error, validation included, with `application/problem+json`.
