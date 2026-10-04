@@ -3,6 +3,8 @@
 import asyncio
 import contextlib
 import logging
+from pathlib import Path
+from typing import Any
 
 from app import config, models, readeck, tts
 
@@ -37,6 +39,9 @@ async def _process_job(job: dict):
             error_msg=None,
         )
         logger.info("Job %s completed: %s", job_id, audio_path.name)
+        # A bookmark has one audio file: a regeneration replaces the old one.
+        superseded = await models.delete_completed_jobs([job["bookmark_id"]], keep_job_id=job_id)
+        remove_audio_files(superseded)
     except asyncio.CancelledError:
         # Shutdown: hand the job back to the queue so the next boot resumes it.
         logger.info("Job %s cancelled during shutdown; returning it to the queue", job_id)
@@ -50,6 +55,47 @@ async def _process_job(job: dict):
             status=models.JobStatus.failed,
             error_msg=str(exc),
         )
+
+
+def remove_audio_files(job_rows: list[dict]) -> None:
+    """Delete the audio files of job rows that have just been deleted."""
+    for row in job_rows:
+        if row.get("audio_path"):
+            (tts.AUDIO_DIR / Path(row["audio_path"]).name).unlink(missing_ok=True)
+
+
+async def queue_bookmarks(
+    bookmark_ids: list[str], prefetched: dict[str, dict[str, Any]] | None = None
+) -> tuple[int, int]:
+    """Queue a job per bookmark, skipping any with a job already pending or running.
+
+    `prefetched` maps ids to Readeck bookmarks the caller already has; the rest
+    are fetched. Returns (queued, skipped).
+    """
+    # De-duplicate while preserving order; a double submit can repeat ids.
+    unique_ids = list(dict.fromkeys(bookmark_ids))
+    queued_ids = [bid for bid in unique_ids if not await models.get_active_job_for_bookmark(bid)]
+    skipped = len(unique_ids) - len(queued_ids)
+
+    bookmarks = dict(prefetched or {})
+    # One concurrent fetch for the whole batch rather than a sequential round
+    # trip per bookmark, and the language is stored so the worker need not
+    # fetch the bookmark a second time.
+    bookmarks.update(await readeck.get_bookmarks([b for b in queued_ids if b not in bookmarks]))
+
+    for bid in queued_ids:
+        bm = bookmarks.get(bid, {})
+        lang = bm.get("lang") or ""
+        engine, voice = tts.resolve_engine_and_voice(lang)
+        await models.create_job(
+            bookmark_id=bid,
+            bookmark_title=bm.get("title") or bid,
+            bookmark_url=bm.get("url") or "",
+            lang=lang,
+            tts_engine=engine,
+            voice=voice,
+        )
+    return len(queued_ids), skipped
 
 
 def _spawn(job: dict) -> asyncio.Task:

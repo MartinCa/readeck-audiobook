@@ -1,11 +1,48 @@
-"""Integration tests for FastAPI routes."""
+"""Integration tests for the JSON API and the frontend fallback."""
 
 import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
 
-from app import config, models, readeck
+from app import bookmarks, config, models, readeck
+
+
+async def _completed(bookmark_id: str, audio_path: str, title: str = "T") -> dict:
+    job = await models.create_job(bookmark_id, title, "http://x", "edge-tts", "v")
+    await models.update_job(job["id"], status=models.JobStatus.completed, audio_path=audio_path)
+    return job
+
+
+def _bookmark(bid: str, **extra) -> dict:
+    return {
+        "id": bid,
+        "title": f"Article {bid}",
+        "url": f"https://example.com/{bid}",
+        "site_name": "Example",
+        "authors": [],
+        "lang": "en",
+        "type": "article",
+        "created": "2026-05-01T10:00:00Z",
+        "published": None,
+        **extra,
+    }
+
+
+@pytest.fixture
+def readeck_page(monkeypatch):
+    """Stub the Readeck listing; returns the mock so tests can inspect calls."""
+
+    def install(items: list[dict]):
+        mock = AsyncMock(
+            return_value={"items": items, "total": len(items), "total_pages": 1, "current_page": 1}
+        )
+        monkeypatch.setattr("app.readeck.list_bookmarks", mock)
+        monkeypatch.setattr("app.readeck.list_all_bookmarks", AsyncMock(return_value=items))
+        bookmarks.clear_cache()
+        return mock
+
+    return install
 
 
 async def test_health(client):
@@ -14,231 +51,232 @@ async def test_health(client):
     assert resp.json() == {"status": "ok"}
 
 
-async def test_api_jobs_empty(client):
-    resp = await client.get("/api/jobs")
+# ── Bookmarks ──────────────────────────────────────────────────────────────────
+
+
+async def test_bookmarks_are_camel_case_with_both_dates(client, readeck_page):
+    readeck_page([_bookmark("a", published="2025-12-24T00:00:00Z", reading_time=4)])
+    resp = await client.get("/api/bookmarks")
     assert resp.status_code == 200
-    assert resp.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
+    body = resp.json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["siteName"] == "Example"
+    assert item["readingTime"] == 4
+    assert item["added"].startswith("2026-05-01T10:00:00")
+    assert item["published"].startswith("2025-12-24")
+    assert item["audio"] is None
+    assert item["job"] is None
+    assert item["autoExcluded"] is False
 
 
-async def test_api_job_status_not_found(client):
-    resp = await client.get("/api/jobs/does-not-exist/status")
-    assert resp.status_code == 404
+async def test_bookmark_shows_its_audio(client, readeck_page):
+    readeck_page([_bookmark("a")])
+    job = await _completed("a", "article-a-123.mp3")
+    item = (await client.get("/api/bookmarks")).json()["items"][0]
+    assert item["audio"]["jobId"] == job["id"]
+    assert item["audio"]["url"] == "/api/audio/article-a-123.mp3"
 
 
-async def test_api_job_status_found(client):
-    job = await models.create_job(
-        bookmark_id="bm1",
-        bookmark_title="Test",
-        bookmark_url="http://example.com",
-        tts_engine="edge-tts",
-        voice="en-US-AriaNeural",
+async def test_bookmark_shows_a_running_job_but_not_a_finished_one(client, readeck_page):
+    readeck_page([_bookmark("a"), _bookmark("b")])
+    await models.create_job("a", "A", "http://x", "edge-tts", "v")
+    await _completed("b", "b.mp3")
+    items = {i["id"]: i for i in (await client.get("/api/bookmarks")).json()["items"]}
+    assert items["a"]["job"]["status"] == "pending"
+    assert items["b"]["job"] is None
+
+
+async def test_javascript_bookmark_url_is_not_passed_through(client, readeck_page):
+    readeck_page([_bookmark("a", url="javascript:alert(1)")])
+    item = (await client.get("/api/bookmarks")).json()["items"][0]
+    assert item["url"] == ""
+
+
+async def test_search_and_added_range_go_to_readeck(client, readeck_page):
+    mock = readeck_page([])
+    await client.get(
+        "/api/bookmarks",
+        params={"search": "go", "addedFrom": "2026-01-01", "addedTo": "2026-01-31", "page": 2},
     )
-    resp = await client.get(f"/api/jobs/{job['id']}/status")
-    assert resp.status_code == 200
-    assert resp.json()["id"] == job["id"]
+    kwargs = mock.call_args.kwargs
+    assert kwargs["search"] == "go"
+    assert kwargs["range_start"] == "2026-01-01T00:00:00Z"
+    assert kwargs["range_end"] == "2026-01-31T23:59:59Z"
+    assert kwargs["offset"] == 30
 
 
-async def test_jobs_page(client):
-    resp = await client.get("/jobs")
-    assert resp.status_code == 200
-    assert b"jobs" in resp.content.lower()
+async def test_filter_by_audio(client, readeck_page):
+    readeck_page([_bookmark("a"), _bookmark("b")])
+    await _completed("a", "a.mp3")
+
+    with_audio = (await client.get("/api/bookmarks", params={"audio": "with"})).json()
+    without = (await client.get("/api/bookmarks", params={"audio": "without"})).json()
+    assert [i["id"] for i in with_audio["items"]] == ["a"]
+    assert [i["id"] for i in without["items"]] == ["b"]
+    assert without["total"] == 1
 
 
-async def test_index_page(client, monkeypatch):
+async def test_filter_by_auto_generation_exclusion(client, readeck_page):
+    readeck_page([_bookmark("a"), _bookmark("b")])
+    await models.set_auto_excluded(["b"], True)
+
+    excluded = (await client.get("/api/bookmarks", params={"autoGeneration": "excluded"})).json()
+    included = (await client.get("/api/bookmarks", params={"autoGeneration": "included"})).json()
+    assert [i["id"] for i in excluded["items"]] == ["b"]
+    assert excluded["items"][0]["autoExcluded"] is True
+    assert [i["id"] for i in included["items"]] == ["a"]
+
+
+async def test_filter_by_published_range_is_inclusive_and_drops_unknown(client, readeck_page):
+    readeck_page(
+        [
+            _bookmark("old", published="2025-01-01T08:00:00Z"),
+            _bookmark("edge", published="2025-06-30T22:00:00Z"),
+            _bookmark("new", published="2026-01-01T00:00:00Z"),
+            _bookmark("unknown"),
+        ]
+    )
+    resp = await client.get(
+        "/api/bookmarks", params={"publishedFrom": "2025-02-01", "publishedTo": "2025-06-30"}
+    )
+    assert [i["id"] for i in resp.json()["items"]] == ["edge"]
+
+    only_start = await client.get("/api/bookmarks", params={"publishedFrom": "2025-02-01"})
+    assert [i["id"] for i in only_start.json()["items"]] == ["edge", "new"]
+
+
+async def test_local_filters_paginate_locally(client, readeck_page):
+    readeck_page([_bookmark(f"b{i}") for i in range(35)])
+    page2 = (await client.get("/api/bookmarks", params={"audio": "without", "page": 2})).json()
+    assert page2["total"] == 35
+    assert page2["totalPages"] == 2
+    assert [i["id"] for i in page2["items"]] == [f"b{i}" for i in range(30, 35)]
+
+
+async def test_invalid_filter_is_a_problem_response(client, readeck_page):
+    readeck_page([])
+    resp = await client.get("/api/bookmarks", params={"audio": "maybe"})
+    assert resp.status_code == 422
+    assert resp.headers["content-type"] == "application/problem+json"
+    assert "audio" in resp.json()["errors"]
+
+
+async def test_readeck_outage_is_a_502_problem(client, monkeypatch):
     monkeypatch.setattr(
         "app.readeck.list_bookmarks",
-        AsyncMock(return_value={"items": [], "total": 0, "total_pages": 1, "current_page": 1}),
+        AsyncMock(side_effect=readeck.ReadeckError("Readeck did not respond in time.")),
     )
-    resp = await client.get("/")
+    resp = await client.get("/api/bookmarks")
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "Readeck did not respond in time."
+
+
+async def test_delete_bookmark_audio(client, audio_dir):
+    await _completed("a", "a.mp3")
+    (audio_dir / "a.mp3").write_bytes(b"x")
+    failed = await models.create_job("a", "A", "http://x", "edge-tts", "v")
+    await models.update_job(failed["id"], status=models.JobStatus.failed)
+
+    resp = await client.post("/api/bookmarks/audio/delete", json={"bookmarkIds": ["a", "zzz"]})
+    assert resp.json() == {"count": 1}
+    assert not (audio_dir / "a.mp3").exists()
+    assert await models.audio_by_bookmark(["a"]) == {}
+    # Only the audio goes; the failed job stays on the Jobs page.
+    assert await models.get_job(failed["id"])
+
+
+async def test_set_and_clear_auto_exclusion(client):
+    resp = await client.put(
+        "/api/bookmarks/auto-generation", json={"bookmarkIds": ["a", "b"], "excluded": True}
+    )
+    assert resp.json() == {"count": 2}
+    assert await models.auto_excluded_ids() == {"a", "b"}
+
+    await client.put(
+        "/api/bookmarks/auto-generation", json={"bookmarkIds": ["a"], "excluded": False}
+    )
+    assert await models.auto_excluded_ids() == {"b"}
+
+
+# ── Jobs ───────────────────────────────────────────────────────────────────────
+
+
+async def test_jobs_empty(client):
+    resp = await client.get("/api/jobs")
     assert resp.status_code == 200
+    assert resp.json() == {"items": [], "total": 0, "page": 1, "pageSize": 50, "totalPages": 1}
 
 
-async def test_post_jobs_queues_and_returns_jobs_page(client, monkeypatch):
+async def test_jobs_list_leaves_out_completed(client):
+    pending = await models.create_job("a", "A", "http://x", "edge-tts", "v")
+    failed = await models.create_job("b", "B", "http://x", "edge-tts", "v")
+    await models.update_job(failed["id"], status=models.JobStatus.failed, error_msg="boom")
+    await _completed("c", "c.mp3")
+
+    body = (await client.get("/api/jobs")).json()
+    assert {j["id"] for j in body["items"]} == {pending["id"], failed["id"]}
+    assert body["total"] == 2
+    by_id = {j["id"]: j for j in body["items"]}
+    assert by_id[failed["id"]]["errorMsg"] == "boom"
+    assert by_id[pending["id"]]["createdAt"].endswith("Z")
+
+    ids = (await client.get("/api/jobs/ids")).json()
+    assert set(ids) == {pending["id"], failed["id"]}
+
+
+async def test_get_job(client):
+    job = await models.create_job("bm1", "Test", "http://example.com", "edge-tts", "v")
+    resp = await client.get(f"/api/jobs/{job['id']}")
+    assert resp.status_code == 200
+    assert resp.json()["bookmarkId"] == "bm1"
+    assert (await client.get("/api/jobs/nope")).status_code == 404
+
+
+async def test_post_jobs_queues(client, monkeypatch):
     monkeypatch.setattr(
         "app.readeck.get_bookmark",
         AsyncMock(return_value={"title": "My Article", "url": "http://example.com"}),
     )
-    resp = await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
+    resp = await client.post("/api/jobs", json={"bookmarkIds": ["abc123", "def456"]})
     assert resp.status_code == 200
-    # Response is the jobs HTML page
-    assert b"My Article" in resp.content
-
-
-async def test_post_jobs_redirects_instead_of_rendering(client, monkeypatch):
-    """POST /jobs must redirect (Post/Redirect/Get), not render the jobs page
-    directly. Rendering it directly would leave the browser's current
-    document POST-derived, so the jobs page's own periodic refresh (used to
-    pick up job status changes) would resubmit that POST instead of doing a
-    plain GET — silently re-queuing the same bookmarks on every refresh.
-    """
-    monkeypatch.setattr(
-        "app.readeck.get_bookmark",
-        AsyncMock(return_value={"title": "My Article", "url": "http://example.com"}),
-    )
-    resp = await client.post("/jobs", data={"bookmark_ids": ["abc123"]}, follow_redirects=False)
-    assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/jobs?flash=")
-
-
-async def test_post_jobs_multiple_bookmarks(client, monkeypatch):
-    monkeypatch.setattr(
-        "app.readeck.get_bookmark",
-        AsyncMock(return_value={"title": "Article", "url": "http://example.com"}),
-    )
-    resp = await client.post("/jobs", data={"bookmark_ids": ["id1", "id2", "id3"]})
-    assert resp.status_code == 200
+    assert resp.json() == {"queued": 2, "skipped": 0}
     jobs, total = await models.list_jobs()
-    assert total == 3
+    assert total == 2
+    assert jobs[0]["bookmark_title"] == "My Article"
+
+
+async def test_post_jobs_requires_ids(client):
+    resp = await client.post("/api/jobs", json={"bookmarkIds": []})
+    assert resp.status_code == 422
 
 
 async def test_post_jobs_skips_duplicate_active_job(client, monkeypatch):
     monkeypatch.setattr(
-        "app.readeck.get_bookmark",
-        AsyncMock(return_value={"title": "My Article", "url": "http://example.com"}),
+        "app.readeck.get_bookmark", AsyncMock(return_value={"title": "A", "url": "http://x"})
     )
-    resp1 = await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
-    assert resp1.status_code == 200
-
-    resp2 = await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
-    assert resp2.status_code == 200
-    assert b"Skipped 1 already queued" in resp2.content
-
-    jobs, total = await models.list_jobs()
-    assert total == 1
+    await client.post("/api/jobs", json={"bookmarkIds": ["abc"]})
+    resp = await client.post("/api/jobs", json={"bookmarkIds": ["abc"]})
+    assert resp.json() == {"queued": 0, "skipped": 1}
 
 
 async def test_post_jobs_allows_requeue_after_completion(client, monkeypatch):
     monkeypatch.setattr(
-        "app.readeck.get_bookmark",
-        AsyncMock(return_value={"title": "My Article", "url": "http://example.com"}),
+        "app.readeck.get_bookmark", AsyncMock(return_value={"title": "A", "url": "http://x"})
     )
-    await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
-    jobs, _ = await models.list_jobs()
-    await models.update_job(jobs[0]["id"], status=models.JobStatus.completed, audio_path="a.mp3")
-
-    resp = await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
-    assert resp.status_code == 200
-    assert b"Queued 1 job" in resp.content
-
-    _, total = await models.list_jobs()
-    assert total == 2
-
-
-async def test_delete_job(client):
-    job = await models.create_job(
-        bookmark_id="bm1",
-        bookmark_title="Test",
-        bookmark_url="http://example.com",
-        tts_engine="edge-tts",
-        voice="en-US-AriaNeural",
-    )
-    resp = await client.delete(f"/jobs/{job['id']}")
-    assert resp.status_code == 200
-    # Empty body: the page removes the card itself rather than swapping in a
-    # JSON blob.
-    assert resp.content == b""
-    assert await models.get_job(job["id"]) is None
-
-
-async def test_delete_job_not_found(client):
-    resp = await client.delete("/jobs/does-not-exist")
-    assert resp.status_code == 404
-
-
-async def test_bulk_delete_jobs(client):
-    job1 = await models.create_job(
-        bookmark_id="bm1",
-        bookmark_title="Test 1",
-        bookmark_url="http://example.com",
-        tts_engine="edge-tts",
-        voice="en-US-AriaNeural",
-    )
-    job2 = await models.create_job(
-        bookmark_id="bm2",
-        bookmark_title="Test 2",
-        bookmark_url="http://example.com",
-        tts_engine="edge-tts",
-        voice="en-US-AriaNeural",
-    )
-    job3 = await models.create_job(
-        bookmark_id="bm3",
-        bookmark_title="Test 3",
-        bookmark_url="http://example.com",
-        tts_engine="edge-tts",
-        voice="en-US-AriaNeural",
-    )
-
-    resp = await client.post("/jobs/bulk-delete", data={"job_ids": [job1["id"], job2["id"]]})
-    assert resp.status_code == 200
-    assert b"Deleted 2 job(s)" in resp.content
-
-    assert await models.get_job(job1["id"]) is None
-    assert await models.get_job(job2["id"]) is None
-    assert await models.get_job(job3["id"]) is not None
-
-
-async def test_bulk_delete_jobs_redirects_instead_of_rendering(client):
-    resp = await client.post(
-        "/jobs/bulk-delete", data={"job_ids": ["nope"]}, follow_redirects=False
-    )
-    assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/jobs?flash=")
-
-
-async def test_bulk_delete_jobs_ignores_unknown_ids(client):
-    resp = await client.post("/jobs/bulk-delete", data={"job_ids": ["nope"]})
-    assert resp.status_code == 200
-    assert b"Deleted 0 job(s)" in resp.content
-
-
-async def test_bulk_delete_jobs_no_ids(client):
-    resp = await client.post("/jobs/bulk-delete", data={})
-    assert resp.status_code == 200
-    assert b"Deleted 0 job(s)" in resp.content
-
-
-async def test_api_job_ids(client):
-    job1 = await models.create_job(
-        bookmark_id="bm1",
-        bookmark_title="Test 1",
-        bookmark_url="http://example.com",
-        tts_engine="edge-tts",
-        voice="en-US-AriaNeural",
-    )
-    job2 = await models.create_job(
-        bookmark_id="bm2",
-        bookmark_title="Test 2",
-        bookmark_url="http://example.com",
-        tts_engine="edge-tts",
-        voice="en-US-AriaNeural",
-    )
-    resp = await client.get("/api/jobs/ids")
-    assert resp.status_code == 200
-    assert set(resp.json()) == {job1["id"], job2["id"]}
-
-
-async def test_audio_not_found(client):
-    resp = await client.get("/audio/nonexistent.mp3")
-    assert resp.status_code == 404
-
-
-async def test_audio_path_traversal_blocked(client):
-    # Path traversal attempt should be safely handled (file won't exist anyway)
-    resp = await client.get("/audio/../../etc/passwd")
-    assert resp.status_code == 404
-
-
-# ── Job creation details ───────────────────────────────────────────────────────
+    await _completed("abc", "a.mp3")
+    resp = await client.post("/api/jobs", json={"bookmarkIds": ["abc"]})
+    assert resp.json() == {"queued": 1, "skipped": 0}
 
 
 async def test_post_jobs_stores_language_and_resolved_engine(client, monkeypatch):
     """The engine and voice are resolved once, at queue time, and stored, so the
-    Jobs page reports what actually ran rather than the current TTS_ENGINE."""
+    UI reports what actually ran rather than the current TTS_ENGINE."""
     monkeypatch.setattr(
         "app.readeck.get_bookmark",
         AsyncMock(return_value={"title": "Ein Artikel", "url": "http://example.com", "lang": "de"}),
     )
-    await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
+    await client.post("/api/jobs", json={"bookmarkIds": ["abc123"]})
 
     jobs, _ = await models.list_jobs()
     assert jobs[0]["lang"] == "de"
@@ -258,7 +296,7 @@ async def test_post_jobs_fetches_bookmarks_concurrently(client, monkeypatch):
         return {"title": f"Article {bookmark_id}", "url": "http://example.com", "lang": "en"}
 
     monkeypatch.setattr("app.readeck.get_bookmark", slow_get_bookmark)
-    resp = await client.post("/jobs", data={"bookmark_ids": [f"id{i}" for i in range(5)]})
+    resp = await client.post("/api/jobs", json={"bookmarkIds": [f"id{i}" for i in range(5)]})
 
     assert resp.status_code == 200
     assert in_flight["peak"] > 1
@@ -271,7 +309,7 @@ async def test_post_jobs_survives_a_failing_bookmark_lookup(client, monkeypatch)
         "app.readeck.get_bookmark",
         AsyncMock(side_effect=readeck.ReadeckError("Readeck returned HTTP 500.")),
     )
-    resp = await client.post("/jobs", data={"bookmark_ids": ["abc123"]})
+    resp = await client.post("/api/jobs", json={"bookmarkIds": ["abc123"]})
 
     assert resp.status_code == 200
     jobs, total = await models.list_jobs()
@@ -282,160 +320,191 @@ async def test_post_jobs_survives_a_failing_bookmark_lookup(client, monkeypatch)
 
 async def test_post_jobs_deduplicates_repeated_ids(client, monkeypatch):
     monkeypatch.setattr(
-        "app.readeck.get_bookmark",
-        AsyncMock(return_value={"title": "A", "url": "http://example.com"}),
+        "app.readeck.get_bookmark", AsyncMock(return_value={"title": "A", "url": "http://x"})
     )
-    await client.post("/jobs", data={"bookmark_ids": ["same", "same", "same"]})
+    await client.post("/api/jobs", json={"bookmarkIds": ["same", "same", "same"]})
     _, total = await models.list_jobs()
     assert total == 1
 
 
-# ── Batched status polling ─────────────────────────────────────────────────────
+async def test_retry_failed_job(client):
+    job = await models.create_job("a", "A", "http://x", "edge-tts", "v")
+    await models.update_job(job["id"], status=models.JobStatus.failed, error_msg="x", attempts=3)
 
-
-async def test_job_statuses_returns_many_at_once(client):
-    a = await models.create_job("bm1", "A", "http://x", "edge-tts", "v")
-    b = await models.create_job("bm2", "B", "http://x", "edge-tts", "v")
-    await models.update_job(b["id"], status=models.JobStatus.completed, audio_path="b-123.mp3")
-
-    resp = await client.get(f"/api/jobs/statuses?ids={a['id']},{b['id']},ghost")
+    resp = await client.post(f"/api/jobs/{job['id']}/retry")
     assert resp.status_code == 200
-    body = resp.json()
-
-    assert body["jobs"][a["id"]]["status"] == "pending"
-    assert body["jobs"][b["id"]]["audio_path"] == "b-123.mp3"
-    assert body["missing"] == ["ghost"]
-
-
-async def test_job_statuses_with_no_ids(client):
-    resp = await client.get("/api/jobs/statuses")
-    assert resp.status_code == 200
-    assert resp.json() == {"jobs": {}, "missing": []}
+    assert resp.json()["status"] == "pending"
+    assert resp.json()["errorMsg"] is None
+    assert (await models.get_job(job["id"]))["attempts"] == 0
+    # Only a failed job can be retried.
+    assert (await client.post(f"/api/jobs/{job['id']}/retry")).status_code == 404
 
 
-# ── Pagination and input validation ────────────────────────────────────────────
+async def test_delete_job(client):
+    job = await models.create_job("bm1", "Test", "http://x", "edge-tts", "v")
+    resp = await client.delete(f"/api/jobs/{job['id']}")
+    assert resp.status_code == 204
+    assert await models.get_job(job["id"]) is None
+    assert (await client.delete(f"/api/jobs/{job['id']}")).status_code == 404
 
 
-async def test_jobs_page_rejects_a_non_positive_page(client):
-    assert (await client.get("/jobs?page=0")).status_code == 422
-    assert (await client.get("/jobs?page=-5")).status_code == 422
+async def test_bulk_delete_jobs(client):
+    a = await models.create_job("a", "A", "http://x", "edge-tts", "v")
+    b = await models.create_job("b", "B", "http://x", "edge-tts", "v")
+    resp = await client.post("/api/jobs/bulk-delete", json={"jobIds": [a["id"], b["id"], "nope"]})
+    assert resp.json() == {"count": 2}
+    assert (await models.list_jobs())[1] == 0
 
 
-async def test_search_term_is_url_encoded_in_pagination_links(client, monkeypatch):
-    """Unencoded, a term containing "&" splits into a second query parameter
-    and page 2 silently searches for something else."""
-    monkeypatch.setattr(
-        "app.readeck.list_bookmarks",
-        AsyncMock(
-            return_value={
-                "items": [{"id": "a", "title": "T", "url": "http://x"}],
-                "total": 100,
-                "total_pages": 5,
-                "current_page": 1,
-            }
-        ),
+# ── Settings and auto generation ───────────────────────────────────────────────
+
+
+async def test_settings_default_to_disabled(client):
+    body = (await client.get("/api/settings")).json()["autoGeneration"]
+    assert body == {
+        "enabled": False,
+        "since": None,
+        "cron": "0 * * * *",
+        "nextRun": None,
+        "lastRun": None,
+        "lastQueued": None,
+        "lastError": None,
+    }
+
+
+async def test_update_settings(client):
+    resp = await client.put(
+        "/api/settings",
+        json={"autoGeneration": {"enabled": True, "since": "2026-01-01", "cron": "*/15 * * * *"}},
     )
-    resp = await client.get("/", params={"search": "rust & go"})
-    assert "search=rust%20%26%20go" in resp.text or "search=rust+%26+go" in resp.text
-    assert "search=rust &amp; go" not in resp.text
-
-
-async def test_index_surfaces_a_readeck_outage(client, monkeypatch):
-    monkeypatch.setattr(
-        "app.readeck.list_bookmarks",
-        AsyncMock(side_effect=readeck.ReadeckError("Could not reach Readeck at http://x.")),
-    )
-    resp = await client.get("/")
     assert resp.status_code == 200
-    # Not the misleading "check your configuration" empty state.
-    assert "Could not load bookmarks" in resp.text
-    assert "Could not reach Readeck" in resp.text
+    body = resp.json()["autoGeneration"]
+    assert body["enabled"] is True
+    assert body["since"] == "2026-01-01"
+    assert body["cron"] == "*/15 * * * *"
+    assert body["nextRun"] is not None
+
+    again = (await client.get("/api/settings")).json()["autoGeneration"]
+    assert again["since"] == "2026-01-01"
 
 
-# ── Output escaping ────────────────────────────────────────────────────────────
+async def test_update_settings_rejects_a_bad_cron(client):
+    resp = await client.put(
+        "/api/settings", json={"autoGeneration": {"enabled": True, "cron": "every hour"}}
+    )
+    assert resp.status_code == 422
+    assert "autoGeneration.cron" in resp.json()["errors"]
 
 
-async def test_javascript_bookmark_url_is_not_linked(client):
-    await models.create_job("bm1", "Sketchy", "javascript:alert(document.domain)", "edge-tts", "v")
-    resp = await client.get("/jobs")
-    assert "javascript:alert" not in resp.text
-
-
-async def test_http_bookmark_url_is_linked(client):
-    await models.create_job("bm1", "Fine", "https://example.com/post", "edge-tts", "v")
-    resp = await client.get("/jobs")
-    assert 'href="https://example.com/post"' in resp.text
-
-
-async def test_flash_is_escaped(client):
-    resp = await client.get("/jobs", params={"flash": "<img src=x onerror=alert(1)>"})
-    assert "<img src=x" not in resp.text
-    assert "&lt;img" in resp.text
+async def test_run_auto_generation_now(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.readeck.list_all_bookmarks", AsyncMock(return_value=[_bookmark("a"), _bookmark("b")])
+    )
+    monkeypatch.setattr("app.readeck.get_bookmarks", AsyncMock(return_value={}))
+    resp = await client.post("/api/auto-generation/run")
+    assert resp.json() == {"queued": 2, "skipped": 0}
+    status = (await client.get("/api/settings")).json()["autoGeneration"]
+    assert status["lastQueued"] == 2
+    assert status["lastRun"] is not None
 
 
 # ── Audio download ─────────────────────────────────────────────────────────────
 
 
+async def test_audio_not_found(client):
+    assert (await client.get("/api/audio/nonexistent.mp3")).status_code == 404
+
+
+async def test_audio_path_traversal_blocked(client):
+    assert (await client.get("/api/audio/../../etc/passwd")).status_code == 404
+
+
 async def test_audio_download_serves_a_real_file(client, audio_dir):
     (audio_dir / "my-article-abc123.mp3").write_bytes(b"ID3audio")
-    resp = await client.get("/audio/my-article-abc123.mp3")
+    resp = await client.get("/api/audio/my-article-abc123.mp3")
     assert resp.status_code == 200
     assert resp.content == b"ID3audio"
 
 
 async def test_audio_download_rejects_non_mp3(client, audio_dir):
     (audio_dir / "secrets.env").write_bytes(b"token")
-    assert (await client.get("/audio/secrets.env")).status_code == 404
+    assert (await client.get("/api/audio/secrets.env")).status_code == 404
 
 
 async def test_audio_download_rejects_a_symlink_escaping_the_directory(client, audio_dir, tmp_path):
     outside = tmp_path / "outside.mp3"
     outside.write_bytes(b"private")
     (audio_dir / "link.mp3").symlink_to(outside)
-    assert (await client.get("/audio/link.mp3")).status_code == 404
+    assert (await client.get("/api/audio/link.mp3")).status_code == 404
 
 
 async def test_delete_job_removes_its_audio_file(client, audio_dir):
-    job = await models.create_job("bm1", "T", "http://x", "edge-tts", "v")
-    audio = audio_dir / "t-abc.mp3"
-    audio.write_bytes(b"x")
-    await models.update_job(job["id"], status=models.JobStatus.completed, audio_path=audio.name)
-
-    resp = await client.delete(f"/jobs/{job['id']}")
-    assert resp.status_code == 200
-    assert not audio.exists()
+    job = await _completed("bm1", "t-abc.mp3")
+    (audio_dir / "t-abc.mp3").write_bytes(b"x")
+    assert (await client.delete(f"/api/jobs/{job['id']}")).status_code == 204
+    assert not (audio_dir / "t-abc.mp3").exists()
 
 
-async def test_bulk_delete_returns_json_when_asked(client):
-    job = await models.create_job("bm1", "T", "http://x", "edge-tts", "v")
-    resp = await client.post(
-        "/jobs/bulk-delete",
-        data={"job_ids": [job["id"]]},
-        headers={"Accept": "application/json"},
-    )
-    assert resp.status_code == 200
-    assert resp.json() == {"deleted": 1}
+# ── Frontend ───────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def built_frontend(tmp_path, monkeypatch):
+    root = tmp_path / "dist"
+    root.mkdir()
+    (root / "index.html").write_text("<div id=root></div>")
+    (root / "favicon.svg").write_text("<svg/>")
+    monkeypatch.setattr(config, "FRONTEND_DIR", root)
+    return root
+
+
+async def test_client_routes_serve_the_app_shell(client, built_frontend):
+    for path in ("/", "/jobs", "/settings"):
+        resp = await client.get(path)
+        assert resp.status_code == 200
+        assert "id=root" in resp.text
+        assert resp.headers["cache-control"] == "no-cache"
+
+
+async def test_frontend_serves_its_own_files(client, built_frontend):
+    assert (await client.get("/favicon.svg")).text == "<svg/>"
+
+
+async def test_frontend_does_not_escape_its_directory(client, built_frontend, tmp_path):
+    (tmp_path / "secret.txt").write_text("private")
+    resp = await client.get("/..%2Fsecret.txt")
+    assert "private" not in resp.text
+
+
+async def test_unknown_api_path_is_a_404_not_the_app_shell(client, built_frontend):
+    resp = await client.get("/api/nope")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"] == "application/problem+json"
+
+
+async def test_missing_build_is_explained(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "FRONTEND_DIR", tmp_path / "missing")
+    resp = await client.get("/")
+    assert resp.status_code == 404
+    assert "pnpm build" in resp.json()["title"]
 
 
 # ── Cross-origin protection ────────────────────────────────────────────────────
 
 
 async def test_cross_origin_post_is_rejected(client):
-    """Without a session there is nothing else stopping a drive-by form post
-    on another site from deleting the visitor's whole job list."""
+    """Without a session there is nothing else stopping a drive-by request
+    from another site from deleting the visitor's whole job list."""
     resp = await client.post(
-        "/jobs/bulk-delete",
-        data={"job_ids": ["x"]},
-        headers={"Origin": "https://evil.example"},
+        "/api/jobs/bulk-delete", json={"jobIds": ["x"]}, headers={"Origin": "https://evil.example"}
     )
     assert resp.status_code == 403
+    assert resp.headers["content-type"] == "application/problem+json"
 
 
 async def test_same_origin_post_is_allowed(client):
     resp = await client.post(
-        "/jobs/bulk-delete",
-        data={"job_ids": ["x"]},
-        headers={"Origin": "http://test", "Accept": "application/json"},
+        "/api/jobs/bulk-delete", json={"jobIds": ["x"]}, headers={"Origin": "http://test"}
     )
     assert resp.status_code == 200
 
@@ -448,9 +517,9 @@ async def test_cross_origin_get_is_unaffected(client):
 async def test_trusted_origin_is_allowed(client, monkeypatch):
     monkeypatch.setattr(config, "TRUSTED_ORIGINS", ("https://audiobook.example.com",))
     resp = await client.post(
-        "/jobs/bulk-delete",
-        data={"job_ids": ["x"]},
-        headers={"Origin": "https://audiobook.example.com", "Accept": "application/json"},
+        "/api/jobs/bulk-delete",
+        json={"jobIds": ["x"]},
+        headers={"Origin": "https://audiobook.example.com"},
     )
     assert resp.status_code == 200
 
@@ -465,22 +534,22 @@ def with_auth(monkeypatch):
 
 
 async def test_auth_is_off_by_default(client):
-    assert (await client.get("/jobs")).status_code == 200
+    assert (await client.get("/api/jobs")).status_code == 200
 
 
 async def test_auth_challenges_when_configured(client, with_auth):
-    resp = await client.get("/jobs")
+    resp = await client.get("/api/jobs")
     assert resp.status_code == 401
     assert resp.headers["www-authenticate"].startswith("Basic")
 
 
 async def test_auth_accepts_correct_credentials(client, with_auth):
-    resp = await client.get("/jobs", auth=("alice", "s3cret"))
+    resp = await client.get("/api/jobs", auth=("alice", "s3cret"))
     assert resp.status_code == 200
 
 
 async def test_auth_rejects_wrong_credentials(client, with_auth):
-    assert (await client.get("/jobs", auth=("alice", "wrong"))).status_code == 401
+    assert (await client.get("/api/jobs", auth=("alice", "wrong"))).status_code == 401
 
 
 async def test_health_stays_open_for_container_healthchecks(client, with_auth):

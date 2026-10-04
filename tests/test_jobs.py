@@ -263,3 +263,32 @@ def _fake_task(collector, job):
     jobs._inflight.add(task)
     task.add_done_callback(jobs._inflight.discard)
     return task
+
+
+class TestAudioReplacement:
+    async def test_a_new_completion_replaces_the_previous_audio(self, monkeypatch, audio_dir):
+        old = await _queue()
+        old_file = audio_dir / "old.mp3"
+        old_file.write_bytes(b"old")
+        await models.update_job(old["id"], status=models.JobStatus.completed, audio_path="old.mp3")
+
+        new = await _queue()
+        claimed = await models.claim_next_pending_job(2)
+        assert claimed["id"] == new["id"]
+        monkeypatch.setattr(jobs.readeck, "get_article_text", _returns("Some words."))
+        monkeypatch.setattr(jobs.tts, "generate_audio", _writes(audio_dir / "new.mp3"))
+        await jobs._process_job(claimed)
+
+        assert await models.get_job(old["id"]) is None
+        assert not old_file.exists()
+        assert (await models.get_job(new["id"]))["audio_path"] == "new.mp3"
+
+    async def test_another_bookmarks_audio_is_untouched(self, monkeypatch, audio_dir):
+        other = await _queue(bookmark_id="other")
+        await models.update_job(other["id"], status=models.JobStatus.completed, audio_path="o.mp3")
+        await _queue(bookmark_id="bm1")
+        claimed = await models.claim_next_pending_job(2)
+        monkeypatch.setattr(jobs.readeck, "get_article_text", _returns("Some words."))
+        monkeypatch.setattr(jobs.tts, "generate_audio", _writes(audio_dir / "new.mp3"))
+        await jobs._process_job(claimed)
+        assert await models.get_job(other["id"])
