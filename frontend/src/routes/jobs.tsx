@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorState } from "@/components/ErrorState";
 import { Pagination } from "@/components/Pagination";
+import { LinkButton } from "@/components/link-button";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -94,9 +95,9 @@ function JobsPage() {
       ) : items.length === 0 ? (
         <div className="text-muted-foreground flex flex-col items-center gap-3 rounded-xl border border-dashed p-8 text-center text-sm">
           <p>Nothing is queued, generating or failed.</p>
-          <Button variant="outline" size="sm" render={<Link to="/" />} nativeButton={false}>
+          <LinkButton variant="outline" size="sm" render={<Link to="/" />}>
             Pick bookmarks to generate audio for
-          </Button>
+          </LinkButton>
         </div>
       ) : (
         <>
