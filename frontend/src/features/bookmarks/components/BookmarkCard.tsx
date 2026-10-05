@@ -1,7 +1,7 @@
 import { DownloadIcon, ExternalLinkIcon, BanIcon } from "lucide-react";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { LinkButton } from "@/components/link-button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { formatDateTime, formatDay, formatUtcDay } from "@/lib/format";
@@ -87,16 +87,15 @@ export function BookmarkCard({ bookmark, selected, onSelectedChange }: BookmarkC
                 className="h-9 w-full min-w-0 sm:flex-1"
                 aria-label={`Audio for ${bookmark.title}`}
               />
-              <Button
+              <LinkButton
                 variant="outline"
                 size="sm"
                 render={<a href={bookmark.audio.url} download={bookmark.audio.filename} />}
-                nativeButton={false}
                 title={`Generated ${formatDateTime(bookmark.audio.generatedAt)} with ${bookmark.audio.ttsEngine}`}
               >
                 <DownloadIcon aria-hidden />
                 Download
-              </Button>
+              </LinkButton>
             </div>
           )}
         </div>

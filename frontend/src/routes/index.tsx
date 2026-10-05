@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { ErrorState } from "@/components/ErrorState";
 import { Pagination } from "@/components/Pagination";
-import { Button } from "@/components/ui/button";
+import { LinkButton } from "@/components/link-button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BookmarkCard } from "@/features/bookmarks/components/BookmarkCard";
 import { BookmarkFilters } from "@/features/bookmarks/components/BookmarkFilters";
@@ -78,21 +78,16 @@ function BookmarksPage() {
           {hasActiveFilters(search) ? (
             <>
               <p>No bookmarks match these filters.</p>
-              <Button variant="outline" size="sm" onClick={() => void navigate({ search: {} })}>
+              <LinkButton variant="outline" size="sm" render={<Link to="/" search={{}} />}>
                 Clear filters
-              </Button>
+              </LinkButton>
             </>
           ) : (
             <>
               <p>No bookmarks yet. Bookmarks saved in Readeck show up here after the next sync.</p>
-              <Button
-                variant="outline"
-                size="sm"
-                render={<Link to="/settings" />}
-                nativeButton={false}
-              >
+              <LinkButton variant="outline" size="sm" render={<Link to="/settings" />}>
                 Sync settings
-              </Button>
+              </LinkButton>
             </>
           )}
         </div>

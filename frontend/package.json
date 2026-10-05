@@ -35,7 +35,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@martinrun/frontend-config": "0.3.3",
+    "@martinrun/frontend-config": "0.3.4",
     "@tanstack/router-plugin": "1.168.42",
     "@types/node": "24.19.1",
     "@types/react": "19.3.0",
