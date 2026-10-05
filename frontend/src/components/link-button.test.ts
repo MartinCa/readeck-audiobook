@@ -36,4 +36,28 @@ describe("LinkButton", () => {
     expect(html).toContain('href="/audio/x.mp3"');
     expect(html).toContain('download="x.mp3"');
   });
+
+  it("forwards className, data-slot and children to a component passed as render", () => {
+    // Stand-in for TanStack's <Link>: a component that spreads its props onto an <a>.
+    const ForwardingLink = (props: { href: string; className?: string }) =>
+      createElement("a", props);
+
+    const html = renderToStaticMarkup(
+      createElement(
+        LinkButton,
+        {
+          variant: "outline",
+          render: createElement(ForwardingLink, { href: "/jobs", className: "" }),
+        },
+        "Jobs",
+      ),
+    );
+
+    expect(html).toMatch(/^<a /);
+    expect(html).toContain('href="/jobs"');
+    expect(html).toContain('data-slot="button"');
+    expect(html).toContain("inline-flex");
+    expect(html).toContain(">Jobs</a>");
+    expect(html).not.toContain("role=");
+  });
 });
