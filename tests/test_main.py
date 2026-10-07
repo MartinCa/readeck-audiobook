@@ -316,9 +316,13 @@ async def test_bookmark_audio_reports_its_duration(client, stored):
     job = await _completed("a", "a.mp3")
     await models.update_job(job["id"], duration_seconds=754.3)
     await _completed("b", "b.mp3")
+    await stored([_bookmark("c")])
+    unreadable = await _completed("c", "c.mp3")
+    await models.update_job(unreadable["id"], duration_seconds=0.0)  # tried, could not be read
     audio = {i["id"]: i["audio"] for i in (await client.get("/api/bookmarks")).json()["items"]}
     assert audio["a"]["durationSeconds"] == 754.3
     assert audio["b"]["durationSeconds"] is None
+    assert audio["c"]["durationSeconds"] is None
 
 
 async def test_post_jobs_requires_ids(client):

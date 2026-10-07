@@ -140,9 +140,10 @@ async def backfill_durations() -> int:
             logger.debug("Audio file %s is missing; skipping its length", path.name)
             continue
         seconds = await asyncio.to_thread(tts.audio_duration, path)
-        if seconds is not None:
-            await models.update_job(job_id, duration_seconds=seconds)
-            measured += 1
+        # A file that exists but cannot be read is recorded as 0 seconds (shown
+        # as unknown), so the next start does not open it and warn all over again.
+        await models.update_job(job_id, duration_seconds=0.0 if seconds is None else seconds)
+        measured += seconds is not None
     return measured
 
 

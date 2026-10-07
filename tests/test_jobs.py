@@ -352,13 +352,19 @@ class TestDuration:
         assert (await models.get_job(pending["id"]))["duration_seconds"] is None
         assert await jobs.backfill_durations() == 0
 
-    async def test_backfill_skips_audio_it_cannot_read(self, monkeypatch, audio_dir):
+    async def test_backfill_tries_a_corrupt_file_once_and_warns_once(self, audio_dir, caplog):
         job = await _queue()
         await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="bad.mp3")
-        (audio_dir / "bad.mp3").write_bytes(b"not audio")
-        monkeypatch.setattr(jobs.tts, "audio_duration", lambda path: None)
-        assert await jobs.backfill_durations() == 0
-        assert (await models.get_job(job["id"]))["duration_seconds"] is None
+        (audio_dir / "bad.mp3").write_bytes(b"not audio")  # really unreadable, not mocked
+        with caplog.at_level("WARNING"):
+            assert await jobs.backfill_durations() == 0
+        assert len(caplog.records) == 1
+        # Recorded as attempted, so the next start leaves it alone and says nothing.
+        assert (await models.get_job(job["id"]))["duration_seconds"] == 0.0
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            assert await jobs.backfill_durations() == 0
+        assert not caplog.records
 
     async def test_backfill_leaves_a_missing_file_alone_and_quiet(
         self, monkeypatch, audio_dir, caplog

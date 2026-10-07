@@ -120,7 +120,8 @@ class Audio(ApiModel):
             tts_engine=row["tts_engine"] or "",
             voice=row["voice"] or "",
             generated_at=_utc(row["updated_at"] or row["created_at"]),
-            duration_seconds=row.get("duration_seconds"),
+            # 0 marks a file that could not be measured (see jobs.backfill_durations).
+            duration_seconds=row.get("duration_seconds") or None,
         )
 
 
