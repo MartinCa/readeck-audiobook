@@ -11,12 +11,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  articleOptions,
   audioOptions,
   exclusionOptions,
   hasActiveFilters,
   type BookmarkSearch,
 } from "@/features/bookmarks/filters";
-import type { AudioFilter, ExclusionFilter } from "@/lib/types";
+import type { ArticleFilter, AudioFilter, ExclusionFilter } from "@/lib/types";
 
 interface BookmarkFiltersProps {
   search: BookmarkSearch;
@@ -61,6 +62,24 @@ export function BookmarkFilters({ search, onChange, onReset }: BookmarkFiltersPr
           </SelectTrigger>
           <SelectContent>
             {audioOptions.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={search.article ?? "any"}
+          items={articleOptions}
+          onValueChange={(v) =>
+            onChange({ article: v === "any" ? undefined : (v as ArticleFilter) })
+          }
+        >
+          <SelectTrigger aria-label="Filter by article text" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {articleOptions.map((o) => (
               <SelectItem key={o.value} value={o.value}>
                 {o.label}
               </SelectItem>

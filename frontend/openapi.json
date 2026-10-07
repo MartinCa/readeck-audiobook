@@ -1,8 +1,28 @@
 {
   "components": {
     "schemas": {
+      "ArticleFilter": {
+        "enum": [
+          "any",
+          "with",
+          "without"
+        ],
+        "title": "ArticleFilter",
+        "type": "string"
+      },
       "Audio": {
         "properties": {
+          "durationSeconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Durationseconds"
+          },
           "filename": {
             "title": "Filename",
             "type": "string"
@@ -35,7 +55,8 @@
           "url",
           "ttsEngine",
           "voice",
-          "generatedAt"
+          "generatedAt",
+          "durationSeconds"
         ],
         "title": "Audio",
         "type": "object"
@@ -213,6 +234,10 @@
             "title": "Description",
             "type": "string"
           },
+          "hasArticle": {
+            "title": "Hasarticle",
+            "type": "boolean"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -242,6 +267,10 @@
               }
             ],
             "title": "Published"
+          },
+          "readeckUrl": {
+            "title": "Readeckurl",
+            "type": "string"
           },
           "readingTime": {
             "anyOf": [
@@ -285,7 +314,9 @@
           "added",
           "audio",
           "job",
-          "autoExcluded"
+          "autoExcluded",
+          "hasArticle",
+          "readeckUrl"
         ],
         "title": "Bookmark",
         "type": "object"
@@ -411,6 +442,21 @@
         ],
         "title": "ExclusionFilter",
         "type": "string"
+      },
+      "GenerationSettings": {
+        "properties": {
+          "minArticleWords": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Minarticlewords",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "minArticleWords"
+        ],
+        "title": "GenerationSettings",
+        "type": "object"
       },
       "HTTPValidationError": {
         "properties": {
@@ -608,6 +654,11 @@
       },
       "QueueResult": {
         "properties": {
+          "noArticle": {
+            "default": 0,
+            "title": "Noarticle",
+            "type": "integer"
+          },
           "queued": {
             "title": "Queued",
             "type": "integer"
@@ -624,10 +675,40 @@
         "title": "QueueResult",
         "type": "object"
       },
+      "ReadeckActionResult": {
+        "description": "How a bulk Readeck action went; a failed bookmark is left as it was.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "doneIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Doneids",
+            "type": "array"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "failed",
+          "doneIds"
+        ],
+        "title": "ReadeckActionResult",
+        "type": "object"
+      },
       "Settings": {
         "properties": {
           "autoGeneration": {
             "$ref": "#/components/schemas/AutoGenerationStatus"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/GenerationSettings"
           },
           "sync": {
             "$ref": "#/components/schemas/SyncStatus"
@@ -635,7 +716,8 @@
         },
         "required": [
           "sync",
-          "autoGeneration"
+          "autoGeneration",
+          "generation"
         ],
         "title": "Settings",
         "type": "object"
@@ -647,6 +729,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/AutoGenerationSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenerationSettings"
               },
               {
                 "type": "null"
@@ -895,6 +987,15 @@
           },
           {
             "in": "query",
+            "name": "article",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ArticleFilter",
+              "default": "any"
+            }
+          },
+          {
+            "in": "query",
             "name": "autoGeneration",
             "required": false,
             "schema": {
@@ -1070,6 +1171,84 @@
           }
         },
         "summary": "Set Auto Exclusion"
+      }
+    },
+    "/api/bookmarks/readeck/archive": {
+      "post": {
+        "description": "Mark read and archive in Readeck, then drop the bookmark and its audio here.",
+        "operationId": "archive_in_readeck_api_bookmarks_readeck_archive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BookmarkIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadeckActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive In Readeck"
+      }
+    },
+    "/api/bookmarks/readeck/delete": {
+      "post": {
+        "description": "Delete from Readeck, then drop the bookmark and its audio here.",
+        "operationId": "delete_in_readeck_api_bookmarks_readeck_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BookmarkIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadeckActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete In Readeck"
       }
     },
     "/api/jobs": {

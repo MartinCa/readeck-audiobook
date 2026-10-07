@@ -286,10 +286,43 @@ async def test_post_jobs_queues(client, monkeypatch):
     )
     resp = await client.post("/api/jobs", json={"bookmarkIds": ["abc123", "def456"]})
     assert resp.status_code == 200
-    assert resp.json() == {"queued": 2, "skipped": 0}
+    assert resp.json() == {"queued": 2, "skipped": 0, "noArticle": 0}
     jobs, total = await models.list_jobs()
     assert total == 2
     assert jobs[0]["bookmark_title"] == "My Article"
+
+
+async def test_post_jobs_skips_bookmarks_without_an_article(client, stored):
+    await stored([_bookmark("a", has_article=False), _bookmark("b", has_article=True)])
+    resp = await client.post("/api/jobs", json={"bookmarkIds": ["a", "b"]})
+    assert resp.json() == {"queued": 1, "skipped": 0, "noArticle": 1}
+    assert len(await models.list_job_ids()) == 1
+
+
+async def test_filter_by_article(client, stored):
+    await stored([_bookmark("a", has_article=False), _bookmark("b", has_article=True)])
+
+    async def ids(article: str) -> list[str]:
+        items = (await client.get("/api/bookmarks", params={"article": article})).json()["items"]
+        return [i["id"] for i in items]
+
+    assert await ids("without") == ["a"]
+    assert await ids("with") == ["b"]
+    assert sorted(await ids("any")) == ["a", "b"]
+
+
+async def test_bookmark_audio_reports_its_duration(client, stored):
+    await stored([_bookmark("a"), _bookmark("b")])
+    job = await _completed("a", "a.mp3")
+    await models.update_job(job["id"], duration_seconds=754.3)
+    await _completed("b", "b.mp3")
+    await stored([_bookmark("c")])
+    unreadable = await _completed("c", "c.mp3")
+    await models.update_job(unreadable["id"], duration_seconds=0.0)  # tried, could not be read
+    audio = {i["id"]: i["audio"] for i in (await client.get("/api/bookmarks")).json()["items"]}
+    assert audio["a"]["durationSeconds"] == 754.3
+    assert audio["b"]["durationSeconds"] is None
+    assert audio["c"]["durationSeconds"] is None
 
 
 async def test_post_jobs_requires_ids(client):
@@ -303,7 +336,7 @@ async def test_post_jobs_skips_duplicate_active_job(client, monkeypatch):
     )
     await client.post("/api/jobs", json={"bookmarkIds": ["abc"]})
     resp = await client.post("/api/jobs", json={"bookmarkIds": ["abc"]})
-    assert resp.json() == {"queued": 0, "skipped": 1}
+    assert resp.json() == {"queued": 0, "skipped": 1, "noArticle": 0}
 
 
 async def test_post_jobs_allows_requeue_after_completion(client, monkeypatch):
@@ -312,7 +345,7 @@ async def test_post_jobs_allows_requeue_after_completion(client, monkeypatch):
     )
     await _completed("abc", "a.mp3")
     resp = await client.post("/api/jobs", json={"bookmarkIds": ["abc"]})
-    assert resp.json() == {"queued": 1, "skipped": 0}
+    assert resp.json() == {"queued": 1, "skipped": 0, "noArticle": 0}
 
 
 async def test_post_jobs_replaces_an_earlier_failure(client, monkeypatch):
@@ -433,6 +466,74 @@ async def test_bulk_delete_jobs_leaves_completed_audio_alone(client):
     assert await models.get_job(done["id"])
 
 
+# ── Readeck actions ────────────────────────────────────────────────────────────
+
+
+async def test_bookmark_links_to_readeck_and_reports_its_article(client, stored):
+    await stored([_bookmark("abc", has_article=False)])
+    item = (await client.get("/api/bookmarks")).json()["items"][0]
+    assert item["readeckUrl"] == f"{config.READECK_BASE_URL}/bookmarks/abc"
+    assert item["hasArticle"] is False
+
+
+async def test_archive_in_readeck_removes_the_bookmark_and_its_audio(
+    client, stored, audio_dir, monkeypatch
+):
+    await stored([_bookmark("a"), _bookmark("b")])
+    (audio_dir / "a.mp3").write_bytes(b"x")
+    await _completed("a", "a.mp3")
+    archive = AsyncMock()
+    monkeypatch.setattr(readeck, "archive_bookmark", archive)
+
+    resp = await client.post("/api/bookmarks/readeck/archive", json={"bookmarkIds": ["a"]})
+    assert resp.json() == {"count": 1, "failed": 0, "doneIds": ["a"]}
+    archive.assert_awaited_once_with("a")
+    assert not (audio_dir / "a.mp3").exists()
+    items = (await client.get("/api/bookmarks")).json()["items"]
+    assert [i["id"] for i in items] == ["b"]
+
+
+async def test_delete_in_readeck_forgets_the_bookmark(client, stored, audio_dir, monkeypatch):
+    await stored([_bookmark("a")])
+    (audio_dir / "a.mp3").write_bytes(b"x")
+    await _completed("a", "a.mp3")
+    monkeypatch.setattr(readeck, "delete_bookmark", AsyncMock())
+
+    resp = await client.post("/api/bookmarks/readeck/delete", json={"bookmarkIds": ["a"]})
+    assert resp.json() == {"count": 1, "failed": 0, "doneIds": ["a"]}
+    assert await models.get_bookmark_rows(["a"]) == {}
+    assert not (audio_dir / "a.mp3").exists()
+
+
+async def test_a_bookmark_already_gone_from_readeck_counts_as_deleted(client, stored, monkeypatch):
+    await stored([_bookmark("a")])
+    monkeypatch.setattr(
+        readeck, "delete_bookmark", AsyncMock(side_effect=readeck.BookmarkGone("gone"))
+    )
+    resp = await client.post("/api/bookmarks/readeck/delete", json={"bookmarkIds": ["a"]})
+    assert resp.json() == {"count": 1, "failed": 0, "doneIds": ["a"]}
+    assert await models.get_bookmark_rows(["a"]) == {}
+
+
+async def test_a_failed_readeck_action_leaves_the_bookmark_untouched(
+    client, stored, audio_dir, monkeypatch
+):
+    await stored([_bookmark("a"), _bookmark("b")])
+    (audio_dir / "a.mp3").write_bytes(b"x")
+    await _completed("a", "a.mp3")
+
+    async def flaky(bookmark_id):
+        if bookmark_id == "a":
+            raise readeck.ReadeckError("Readeck returned HTTP 500.")
+
+    monkeypatch.setattr(readeck, "archive_bookmark", flaky)
+    resp = await client.post("/api/bookmarks/readeck/archive", json={"bookmarkIds": ["a", "b"]})
+    assert resp.json() == {"count": 1, "failed": 1, "doneIds": ["b"]}
+    assert (audio_dir / "a.mp3").exists()
+    items = (await client.get("/api/bookmarks")).json()["items"]
+    assert [i["id"] for i in items] == ["a"]
+
+
 # ── Settings and auto generation ───────────────────────────────────────────────
 
 
@@ -447,6 +548,14 @@ async def test_settings_default_to_disabled(client):
         "lastQueued": None,
         "lastError": None,
     }
+
+
+async def test_minimum_article_words_defaults_and_can_be_changed(client):
+    assert (await client.get("/api/settings")).json()["generation"] == {"minArticleWords": 30}
+    resp = await client.put("/api/settings", json={"generation": {"minArticleWords": 80}})
+    assert resp.json()["generation"] == {"minArticleWords": 80}
+    bad = await client.put("/api/settings", json={"generation": {"minArticleWords": -1}})
+    assert bad.status_code == 422
 
 
 async def test_update_settings(client):
@@ -510,7 +619,7 @@ async def test_run_auto_generation_now(client, stored, monkeypatch):
     await stored([_bookmark("a"), _bookmark("b")])
     monkeypatch.setattr("app.readeck.get_bookmarks", AsyncMock(return_value={}))
     resp = await client.post("/api/auto-generation/run")
-    assert resp.json() == {"queued": 2, "skipped": 0}
+    assert resp.json() == {"queued": 2, "skipped": 0, "noArticle": 0}
     status = (await client.get("/api/settings")).json()["autoGeneration"]
     assert status["lastQueued"] == 2
     assert status["lastRun"] is not None

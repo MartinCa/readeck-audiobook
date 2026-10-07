@@ -19,6 +19,12 @@ class AudioFilter(StrEnum):
     without_audio = "without"
 
 
+class ArticleFilter(StrEnum):
+    any = "any"
+    with_article = "with"
+    without_article = "without"
+
+
 class ExclusionFilter(StrEnum):
     any = "any"
     excluded = "excluded"
@@ -33,6 +39,7 @@ class BookmarkFilters:
     published_from: date | None = None
     published_to: date | None = None
     audio: AudioFilter = AudioFilter.any
+    article: ArticleFilter = ArticleFilter.any
     exclusion: ExclusionFilter = ExclusionFilter.any
 
     def query(self) -> dict[str, Any]:
@@ -52,6 +59,9 @@ class BookmarkFilters:
             "has_audio": None
             if self.audio == AudioFilter.any
             else self.audio == AudioFilter.with_audio,
+            "has_article": None
+            if self.article == ArticleFilter.any
+            else self.article == ArticleFilter.with_article,
             "excluded": None
             if self.exclusion == ExclusionFilter.any
             else self.exclusion == ExclusionFilter.excluded,

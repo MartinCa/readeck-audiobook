@@ -193,6 +193,19 @@ _STRIKETHROUGH = re.compile(r"~~(\S(?:[^~\n]*?\S)?)~~")
 _SENTENCE_END = ".!?:;,…\"')]"
 
 
+def _end_sentence(text: str) -> str:
+    """Close a block of text with a stop unless it already ends one.
+
+    Engines treat punctuation as the end of a sentence. A block that has none
+    runs on into whatever follows, and when it is the last line of an article,
+    the final words are the ones most likely to be clipped.
+    """
+    text = text.rstrip()
+    if text and re.search(r"\w", text) and not text.endswith(tuple(_SENTENCE_END)):
+        return text + "."
+    return text
+
+
 def _table_row_to_sentence(line: str) -> str:
     """Render a table row as prose — spoken pipes are unlistenable."""
     cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -228,8 +241,36 @@ def _clean_block_markup(text: str) -> str:
             out.append(title)
             continue
 
-        out.append(_LIST_MARKER.sub("", line).rstrip())
+        item = _LIST_MARKER.sub("", line).rstrip()
+        # A list item is spoken as a sentence of its own; without a stop it
+        # runs into the next one.
+        out.append(_end_sentence(item) if item != line.rstrip() else item)
     return "\n".join(out)
+
+
+_FRONT_MATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
+_FRONT_MATTER_LINE = re.compile(r"^(?:[\w-]+:.*|[ \t]+\S.*|[ \t]*-[ \t].*|)$")
+
+
+def strip_front_matter(text: str) -> str:
+    """Drop the YAML header Readeck puts on its Markdown export.
+
+    The block between two `---` lines only counts when every line looks like
+    YAML, so an article that opens with a horizontal rule keeps its content.
+    """
+    match = _FRONT_MATTER.match(text.replace("\r\n", "\n"))
+    if match and all(_FRONT_MATTER_LINE.match(line) for line in match.group(1).split("\n")):
+        return text.replace("\r\n", "\n")[match.end() :]
+    return text
+
+
+def count_words(text: str) -> int:
+    """Words of article text worth reading out: no header, no title heading, no markup."""
+    body = strip_front_matter(text).lstrip()
+    # Readeck repeats the title as a heading ahead of the article.
+    if body.startswith("#"):
+        body = body.partition("\n")[2]
+    return len(re.findall(r"\w+", _clean_markdown(body)))
 
 
 def _clean_markdown(text: str) -> str:
@@ -237,6 +278,7 @@ def _clean_markdown(text: str) -> str:
     if not text:
         return ""
 
+    text = strip_front_matter(text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = _HTML_COMMENT.sub("", text)
     text = _FENCED_CODE.sub("\n", text)
@@ -263,7 +305,7 @@ def _clean_markdown(text: str) -> str:
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"[ \t]+(\n)", r"\1", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    return "\n\n".join(_end_sentence(block) for block in text.strip().split("\n\n"))
 
 
 # ── Chunking ───────────────────────────────────────────────────────────────────
@@ -579,6 +621,36 @@ def release_kokoro() -> bool:
     return True
 
 
+# Silence added after the last word. Some players (VLC, for one) end a variable
+# bitrate MP3 slightly before its true end, which cut the last word of an
+# article off; with silence behind the speech, what is lost is only silence.
+# Written into the encode, not appended afterwards, so the header's length
+# still matches the file.
+END_SILENCE_SECONDS = 2
+
+
+def _kokoro_ffmpeg_command(wav_path: Path, output_path: Path) -> list[str]:
+    """The ffmpeg call that turns Kokoro's WAV into the finished MP3."""
+    return [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(wav_path),
+        "-af",
+        f"apad=pad_dur={END_SILENCE_SECONDS}",
+        "-codec:a",
+        "libmp3lame",
+        "-qscale:a",
+        "2",
+        # generate_audio synthesizes to a "<name>.mp3.part" sibling
+        # and renames it into place, and ffmpeg picks its muxer from
+        # the extension — ".part" means nothing to it. State it.
+        "-f",
+        "mp3",
+        str(output_path),
+    ]
+
+
 async def synthesize_kokoro(
     text: str, output_path: Path, voice: str = "", on_progress: ProgressCallback | None = None
 ):
@@ -656,23 +728,9 @@ async def synthesize_kokoro(
                     if writer is not None:
                         writer.close()
 
-                ffmpeg_cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    str(wav_path),
-                    "-codec:a",
-                    "libmp3lame",
-                    "-qscale:a",
-                    "2",
-                    # generate_audio synthesizes to a "<name>.mp3.part" sibling
-                    # and renames it into place, and ffmpeg picks its muxer from
-                    # the extension — ".part" means nothing to it. State it.
-                    "-f",
-                    "mp3",
-                    str(output_path),
-                ]
-                result = subprocess.run(ffmpeg_cmd, capture_output=True)
+                result = subprocess.run(
+                    _kokoro_ffmpeg_command(wav_path, output_path), capture_output=True
+                )
                 if result.returncode != 0:
                     stderr = result.stderr.decode(errors="replace")
                     raise RuntimeError(
@@ -705,6 +763,17 @@ def _tag_mp3(path: Path, title: str, url: str, engine: str) -> None:
         tags.save(str(path), v2_version=3)
     except Exception as exc:  # tagging is cosmetic — never fail a job over it
         logger.warning("Could not write ID3 tags to %s: %s", path.name, exc)
+
+
+def audio_duration(path: Path) -> float | None:
+    """The length of an MP3 in seconds, or None if it cannot be read."""
+    try:
+        from mutagen.mp3 import MP3
+
+        return round(float(MP3(str(path)).info.length), 1)
+    except Exception as exc:  # a missing length must never fail a job
+        logger.warning("Could not read the duration of %s: %s", path.name, exc)
+        return None
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────

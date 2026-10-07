@@ -182,3 +182,56 @@ async def test_a_failed_state_write_does_not_hide_the_sync_error(remote, monkeyp
     with pytest.raises(readeck.ReadeckError, match="Readeck is down"):
         await sync.run_once()
     assert not sync.is_running()
+
+
+async def _with_audio(remote, audio_dir, **extra):
+    remote.library = {"a": ("1", _bm("a")), "b": ("1", _bm("b"))}
+    await sync.run_once()
+    job = await models.create_job("a", "Title a", "http://x", "edge-tts", "v")
+    await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="a.mp3")
+    (audio_dir / "a.mp3").write_bytes(b"x")
+    return job
+
+
+@pytest.mark.parametrize("finished", [{"is_archived": True}, {"read_progress": 100}])
+async def test_an_archived_or_read_bookmark_loses_its_audio_and_leaves_the_list(
+    remote, audio_dir, finished
+):
+    job = await _with_audio(remote, audio_dir)
+
+    remote.library["a"] = ("2", _bm("a", **finished))
+    state = await sync.run_once()
+    assert (state.added, state.updated, state.removed) == (0, 0, 1)
+    assert not (audio_dir / "a.mp3").exists()
+    assert await models.get_job(job["id"]) is None
+    assert "a" not in await models.queued_bookmark_ids()
+    items, total = await models.query_bookmarks()
+    assert [i["id"] for i in items] == ["b"]
+    assert total == 1
+    assert await models.count_bookmarks() == 1
+
+
+async def test_a_finished_bookmark_is_not_fetched_again_until_it_changes(remote, audio_dir):
+    remote.library = {"a": ("1", _bm("a", is_archived=True))}
+    await sync.run_once()
+    remote.fetched.clear()
+    await sync.run_once()
+    assert remote.fetched == [[]]
+
+
+async def test_a_bookmark_unarchived_in_readeck_comes_back(remote, audio_dir):
+    remote.library = {"a": ("1", _bm("a", is_archived=True))}
+    await sync.run_once()
+    remote.library["a"] = ("2", _bm("a", is_archived=False, read_progress=0))
+    state = await sync.run_once()
+    assert state.updated == 1
+    items, _ = await models.query_bookmarks()
+    assert [i["id"] for i in items] == ["a"]
+    # It has no audio and is eligible for auto generation again.
+    assert [b["id"] for b in await models.auto_generation_candidates()] == ["a"]
+
+
+def test_to_row_records_whether_readeck_extracted_an_article():
+    assert sync.to_row(_bm("a", has_article=False), "v", "t")["has_article"] == 0
+    assert sync.to_row(_bm("a", has_article=True), "v", "t")["has_article"] == 1
+    assert sync.to_row(_bm("a"), "v", "t")["has_article"] == 1

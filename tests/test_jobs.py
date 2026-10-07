@@ -13,6 +13,12 @@ def _use_db(db):
     """Pull in the db fixture for every test in this module."""
 
 
+@pytest.fixture(autouse=True)
+def _no_minimum_article_length(monkeypatch):
+    """The fixtures use one-line articles; the length guard has its own tests."""
+    monkeypatch.setattr(jobs, "DEFAULT_MIN_ARTICLE_WORDS", 0)
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _clear_inflight():
     jobs._inflight.clear()
@@ -321,8 +327,97 @@ class TestQueueBookmarks:
 
         monkeypatch.setattr(jobs.readeck, "get_bookmarks", slow_fetch)
         results = await asyncio.gather(jobs.queue_bookmarks(["bm1"]), jobs.queue_bookmarks(["bm1"]))
-        assert sorted(results) == [(0, 1), (1, 0)]
+        assert sorted((r.queued, r.skipped) for r in results) == [(0, 1), (1, 0)]
         assert len(await models.list_job_ids()) == 1
+
+
+class TestDuration:
+    async def test_a_completed_job_records_how_long_the_audio_is(self, monkeypatch, audio_dir):
+        await _queue()
+        claimed = await models.claim_next_pending_job(2)
+        monkeypatch.setattr(jobs.readeck, "get_article_text", _returns("Some words."))
+        monkeypatch.setattr(jobs.tts, "generate_audio", _writes(audio_dir / "new.mp3"))
+        monkeypatch.setattr(jobs.tts, "audio_duration", lambda path: 754.3)
+        await jobs._process_job(claimed)
+        assert (await models.get_job(claimed["id"]))["duration_seconds"] == 754.3
+
+    async def test_backfill_measures_audio_that_has_no_length_yet(self, monkeypatch, audio_dir):
+        job = await _queue()
+        await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="old.mp3")
+        (audio_dir / "old.mp3").write_bytes(b"x")
+        pending = await _queue(bookmark_id="bm2")
+        monkeypatch.setattr(jobs.tts, "audio_duration", lambda path: 60.0)
+        assert await jobs.backfill_durations() == 1
+        assert (await models.get_job(job["id"]))["duration_seconds"] == 60.0
+        assert (await models.get_job(pending["id"]))["duration_seconds"] is None
+        assert await jobs.backfill_durations() == 0
+
+    async def test_backfill_tries_a_corrupt_file_once_and_warns_once(self, audio_dir, caplog):
+        job = await _queue()
+        await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="bad.mp3")
+        (audio_dir / "bad.mp3").write_bytes(b"not audio")  # really unreadable, not mocked
+        with caplog.at_level("WARNING"):
+            assert await jobs.backfill_durations() == 0
+        assert len(caplog.records) == 1
+        # Recorded as attempted, so the next start leaves it alone and says nothing.
+        assert (await models.get_job(job["id"]))["duration_seconds"] == 0.0
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            assert await jobs.backfill_durations() == 0
+        assert not caplog.records
+
+    async def test_backfill_leaves_a_missing_file_alone_and_quiet(
+        self, monkeypatch, audio_dir, caplog
+    ):
+        job = await _queue()
+        await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="gone.mp3")
+
+        def explode(path):
+            raise AssertionError("a missing file must not be opened")
+
+        monkeypatch.setattr(jobs.tts, "audio_duration", explode)
+        with caplog.at_level("WARNING"):
+            assert await jobs.backfill_durations() == 0
+        assert not caplog.records
+        assert (await models.get_job(job["id"]))["duration_seconds"] is None
+
+
+class TestArticleLength:
+    async def test_a_failed_extraction_fails_the_job_without_audio(self, monkeypatch, audio_dir):
+        monkeypatch.setattr(jobs, "DEFAULT_MIN_ARTICLE_WORDS", 30)
+        await _queue()
+        claimed = await models.claim_next_pending_job(2)
+        # What Readeck's article.md holds for a bookmark it extracted nothing from.
+        stub = (
+            "---\ntitle: Alternatives to GPS are around the corner\n"
+            'saved: "2026-09-27"\nwebsite: www.economist.com\nlabels:\n    - inbox\n---\n\n'
+            "# Alternatives to GPS are around the corner\n\n~ $\n"
+        )
+        monkeypatch.setattr(jobs.readeck, "get_article_text", _returns(stub))
+        generate = _writes(audio_dir / "never.mp3")
+        monkeypatch.setattr(jobs.tts, "generate_audio", generate)
+        await jobs._process_job(claimed)
+
+        job = await models.get_job(claimed["id"])
+        assert job["status"] == "failed"
+        assert "only 0 words" in job["error_msg"]
+        assert not (audio_dir / "never.mp3").exists()
+
+    async def test_the_minimum_is_a_setting(self, monkeypatch, audio_dir):
+        await jobs.save_min_article_words(3)
+        assert await jobs.load_min_article_words() == 3
+        await _queue()
+        claimed = await models.claim_next_pending_job(2)
+        monkeypatch.setattr(jobs.readeck, "get_article_text", _returns("# T\n\nOnly two."))
+        monkeypatch.setattr(jobs.tts, "generate_audio", _writes(audio_dir / "x.mp3"))
+        await jobs._process_job(claimed)
+        assert (await models.get_job(claimed["id"]))["status"] == "failed"
+
+        await jobs.save_min_article_words(2)
+        await _queue(bookmark_id="bm2")
+        claimed = await models.claim_next_pending_job(2)
+        await jobs._process_job(claimed)
+        assert (await models.get_job(claimed["id"]))["status"] == "completed"
 
 
 class TestBookmarkGoneFromReadeck:

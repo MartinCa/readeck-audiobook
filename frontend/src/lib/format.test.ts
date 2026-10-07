@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { describeCron, formatDay, formatUtcDay, jobStatusLabel, plural } from "@/lib/format";
+import {
+  describeCron,
+  formatDay,
+  formatDuration,
+  formatUtcDay,
+  jobStatusLabel,
+  plural,
+} from "@/lib/format";
 
 describe("formatDay", () => {
   it("formats an ISO timestamp as a day", () => {
@@ -54,5 +61,20 @@ describe("jobStatusLabel", () => {
   it("falls back to the plain label without progress", () => {
     expect(jobStatusLabel("processing", null)).toBe("Generating audio");
     expect(jobStatusLabel("pending", null)).toBe("Queued");
+  });
+});
+
+describe("formatDuration", () => {
+  it("shows minutes and seconds, adding hours from an hour up", () => {
+    expect(formatDuration(0)).toBe("0:00");
+    expect(formatDuration(754.3)).toBe("12:34");
+    expect(formatDuration(3599.6)).toBe("1:00:00");
+    expect(formatDuration(3909)).toBe("1:05:09");
+  });
+
+  it("says so when the length is unknown", () => {
+    expect(formatDuration(null)).toBe("—");
+    expect(formatDuration(undefined)).toBe("—");
+    expect(formatDuration(Number.NaN)).toBe("—");
   });
 });

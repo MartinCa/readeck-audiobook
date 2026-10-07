@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ErrorState } from "@/components/ErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AutoGenerationForm } from "@/features/settings/components/AutoGenerationForm";
+import { GenerationForm } from "@/features/settings/components/GenerationForm";
 import { SyncForm } from "@/features/settings/components/SyncForm";
 import { useSettings } from "@/features/settings/hooks";
 
@@ -28,6 +29,7 @@ function SettingsPage() {
         <>
           <SyncForm status={settings.data.sync} />
           <AutoGenerationForm status={settings.data.autoGeneration} />
+          <GenerationForm settings={settings.data.generation} />
         </>
       )}
     </div>

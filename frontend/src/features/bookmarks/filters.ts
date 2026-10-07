@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AudioFilter, ExclusionFilter } from "@/lib/types";
+import type { ArticleFilter, AudioFilter, ExclusionFilter } from "@/lib/types";
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -11,6 +11,7 @@ export const bookmarkSearchSchema = z.object({
   page: z.number().int().min(1).optional().catch(undefined),
   search: z.string().optional().catch(undefined),
   audio: z.enum(["any", "with", "without"]).optional().catch(undefined),
+  article: z.enum(["any", "with", "without"]).optional().catch(undefined),
   autoGeneration: z.enum(["any", "excluded", "included"]).optional().catch(undefined),
   addedFrom: isoDate.optional().catch(undefined),
   addedTo: isoDate.optional().catch(undefined),
@@ -26,6 +27,12 @@ export const audioOptions: { value: AudioFilter; label: string }[] = [
   { value: "without", label: "No audio" },
 ];
 
+export const articleOptions: { value: ArticleFilter; label: string }[] = [
+  { value: "any", label: "Any article text" },
+  { value: "with", label: "Has article text" },
+  { value: "without", label: "No article text" },
+];
+
 export const exclusionOptions: { value: ExclusionFilter; label: string }[] = [
   { value: "any", label: "Any auto generation" },
   { value: "included", label: "Auto generation on" },
@@ -37,6 +44,7 @@ export function hasActiveFilters(search: BookmarkSearch): boolean {
   return Boolean(
     search.search ||
     (search.audio && search.audio !== "any") ||
+    (search.article && search.article !== "any") ||
     (search.autoGeneration && search.autoGeneration !== "any") ||
     search.addedFrom ||
     search.addedTo ||

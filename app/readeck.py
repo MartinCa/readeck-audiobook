@@ -158,6 +158,31 @@ async def get_bookmark(bookmark_id: str) -> dict[str, Any]:
     return resp.json()
 
 
+async def archive_bookmark(bookmark_id: str) -> None:
+    """Archive a bookmark and mark it read (progress 100), as Readeck's own button pair does."""
+    try:
+        resp = await _client().patch(
+            f"{READECK_BASE_URL}/api/bookmarks/{bookmark_id}",
+            json={"is_archived": True, "read_progress": 100},
+        )
+        _raise_for_status(resp)
+    except ReadeckError:
+        raise
+    except Exception as exc:
+        raise ReadeckError(_describe(exc)) from exc
+
+
+async def delete_bookmark(bookmark_id: str) -> None:
+    """Delete a bookmark from Readeck; BookmarkGone if it was already deleted."""
+    try:
+        resp = await _client().delete(f"{READECK_BASE_URL}/api/bookmarks/{bookmark_id}")
+        _raise_for_status(resp)
+    except ReadeckError:
+        raise
+    except Exception as exc:
+        raise ReadeckError(_describe(exc)) from exc
+
+
 async def get_bookmarks(bookmark_ids: list[str]) -> dict[str, dict[str, Any]]:
     """Fetch several bookmarks concurrently; ids that fail are simply omitted."""
     if not bookmark_ids:

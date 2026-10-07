@@ -10,6 +10,10 @@ bookmarks. A sync runs at startup, on its own cron schedule, and on demand:
    (100 to a request) and stored.
 3. Stored ids Readeck no longer lists are confirmed gone and forgotten, with
    their jobs and audio files.
+4. Bookmarks archived or read (progress 100) in Readeck are finished with: they
+   leave the listing and lose their jobs and audio. Their rows stay, marked
+   finished, so an unchanged one is not fetched again; un-archiving one in
+   Readeck brings it back.
 """
 
 import asyncio
@@ -81,6 +85,11 @@ def _utc(value: str | None) -> str | None:
     return parsed.astimezone(UTC).isoformat(timespec="seconds")
 
 
+def is_finished(bm: dict[str, Any]) -> bool:
+    """Whether the bookmark has been archived or read through in Readeck."""
+    return bool(bm.get("is_archived")) or (bm.get("read_progress") or 0) >= 100
+
+
 def to_row(bm: dict[str, Any], readeck_updated: str, synced_at: str) -> dict[str, Any]:
     """A Readeck bookmark as a row of the local `bookmarks` table."""
     return {
@@ -97,6 +106,9 @@ def to_row(bm: dict[str, Any], readeck_updated: str, synced_at: str) -> dict[str
         "created": _utc(bm.get("created")) or synced_at,
         "loaded": 1 if bm.get("loaded", True) else 0,
         "is_deleted": 1 if bm.get("is_deleted") else 0,
+        "finished": 1 if is_finished(bm) else 0,
+        # Readeck found no article text (a paywall, say); there is nothing to read out.
+        "has_article": 0 if bm.get("has_article") is False else 1,
         "readeck_updated": readeck_updated,
         "synced_at": synced_at,
     }
@@ -127,8 +139,14 @@ async def run_once() -> SyncState | None:
         await models.upsert_bookmarks(
             [to_row(bm, remote.get(bm["id"], ""), synced_at) for bm in fetched]
         )
-        state.added = sum(1 for bm in fetched if bm["id"] not in local)
-        state.updated = len(fetched) - state.added
+        finished = [bm["id"] for bm in fetched if is_finished(bm)]
+        # Deleting audio is not undoable, but this only follows an explicit
+        # archive or read in Readeck.
+        await jobs.forget_bookmarks(finished, keep_rows=True)
+        live = [bm for bm in fetched if not is_finished(bm)]
+        state.added = sum(1 for bm in live if bm["id"] not in local)
+        state.updated = len(live) - state.added
+        state.removed = len(finished)
 
         missing = [bid for bid in local if bid not in remote]
         if missing:
@@ -137,7 +155,7 @@ async def run_once() -> SyncState | None:
             still_there = {bm["id"] for bm in await readeck.fetch_bookmarks(missing)}
             gone = [bid for bid in missing if bid not in still_there]
             await jobs.forget_bookmarks(gone)
-            state.removed = len(gone)
+            state.removed += len(gone)
 
         if state.added or state.updated or state.removed:
             logger.info(

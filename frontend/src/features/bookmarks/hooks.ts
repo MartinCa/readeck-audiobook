@@ -44,6 +44,16 @@ export function useDeleteAudio() {
   return useMutation({ mutationFn: bookmarksApi.deleteAudio, onSuccess: invalidate });
 }
 
+export function useArchiveInReadeck() {
+  const invalidate = useInvalidateAll();
+  return useMutation({ mutationFn: bookmarksApi.archiveInReadeck, onSuccess: invalidate });
+}
+
+export function useDeleteInReadeck() {
+  const invalidate = useInvalidateAll();
+  return useMutation({ mutationFn: bookmarksApi.deleteInReadeck, onSuccess: invalidate });
+}
+
 export function useSetAutoExcluded() {
   const invalidate = useInvalidateAll();
   return useMutation({

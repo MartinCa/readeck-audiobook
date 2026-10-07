@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     audio_path    TEXT,
     error_msg     TEXT,
     progress_done INTEGER,
-    progress_total INTEGER
+    progress_total INTEGER,
+    duration_seconds REAL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_bookmark ON jobs(bookmark_id, status);
@@ -67,6 +68,8 @@ CREATE TABLE IF NOT EXISTS bookmarks (
     created         TEXT NOT NULL,
     loaded          INTEGER NOT NULL DEFAULT 1,
     is_deleted      INTEGER NOT NULL DEFAULT 0,
+    finished        INTEGER NOT NULL DEFAULT 0,
+    has_article     INTEGER NOT NULL DEFAULT 1,
     readeck_updated TEXT NOT NULL DEFAULT '',
     synced_at       TEXT NOT NULL
 );
@@ -85,6 +88,14 @@ _MIGRATIONS = {
     "attempts": "ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
     "progress_done": "ALTER TABLE jobs ADD COLUMN progress_done INTEGER",
     "progress_total": "ALTER TABLE jobs ADD COLUMN progress_total INTEGER",
+    "duration_seconds": "ALTER TABLE jobs ADD COLUMN duration_seconds REAL",
+}
+# The same for the bookmarks table. A bookmark synced before `finished` existed
+# has to be read again to learn whether it is archived or read, so adding the
+# column also clears the stored versions.
+_BOOKMARK_MIGRATIONS = {
+    "finished": "ALTER TABLE bookmarks ADD COLUMN finished INTEGER NOT NULL DEFAULT 0",
+    "has_article": "ALTER TABLE bookmarks ADD COLUMN has_article INTEGER NOT NULL DEFAULT 1",
 }
 
 
@@ -130,6 +141,12 @@ async def init_db():
         for column, statement in _MIGRATIONS.items():
             if column not in existing:
                 await db.execute(statement)
+        async with db.execute("PRAGMA table_info(bookmarks)") as cur:
+            existing = {row[1] for row in await cur.fetchall()}
+        for column, statement in _BOOKMARK_MIGRATIONS.items():
+            if column not in existing:
+                await db.execute(statement)
+                await db.execute("UPDATE bookmarks SET readeck_updated = ''")
         # Databases from before queued_bookmarks existed: their jobs count.
         await db.execute(
             "INSERT OR IGNORE INTO queued_bookmarks (bookmark_id, first_queued_at) "
@@ -224,7 +241,9 @@ async def list_jobs(
             return [dict(r) for r in rows], total
 
 
-_UPDATABLE_COLUMNS = frozenset({"status", "audio_path", "error_msg", "attempts"})
+_UPDATABLE_COLUMNS = frozenset(
+    {"status", "audio_path", "error_msg", "attempts", "duration_seconds"}
+)
 
 # Jobs the Jobs page shows. A completed job is the bookmark's audio, which the
 # Bookmarks page shows instead.
@@ -290,6 +309,16 @@ async def list_job_ids(statuses: tuple[str, ...] | None = None) -> list[str]:
         async with db.execute(f"SELECT id FROM jobs {where} {_ORDER_BY}", params) as cur:
             rows = await cur.fetchall()
             return [row[0] for row in rows]
+
+
+async def audio_missing_duration() -> list[tuple[str, str]]:
+    """(job id, audio filename) of finished audio whose length was never recorded."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT id, audio_path FROM jobs WHERE status = 'completed' "
+            "AND audio_path IS NOT NULL AND audio_path != '' AND duration_seconds IS NULL"
+        ) as cur:
+            return [(row[0], row[1]) for row in await cur.fetchall()]
 
 
 async def list_audio_paths() -> set[str]:
@@ -535,13 +564,15 @@ _BOOKMARK_COLUMNS = (
     "created",
     "loaded",
     "is_deleted",
+    "finished",
+    "has_article",
     "readeck_updated",
     "synced_at",
 )
 
-# A bookmark worth showing: Readeck has finished fetching it and it is not on
-# its way to the bin.
-_VISIBLE = "b.loaded = 1 AND b.is_deleted = 0"
+# A bookmark worth showing: Readeck has finished fetching it, it is not on its
+# way to the bin, and it is neither archived nor read (`finished`).
+_VISIBLE = "b.loaded = 1 AND b.is_deleted = 0 AND b.finished = 0"
 _HAS_AUDIO = (
     "EXISTS (SELECT 1 FROM jobs j WHERE j.bookmark_id = b.id AND j.status = 'completed' "
     "AND j.audio_path IS NOT NULL AND j.audio_path != '')"
@@ -571,11 +602,13 @@ async def upsert_bookmarks(rows: list[dict]) -> None:
         await db.execute("COMMIT")
 
 
-async def delete_bookmarks(bookmark_ids: list[str]) -> list[dict]:
-    """Forget bookmarks that are gone from Readeck, with everything kept for them.
+async def delete_bookmarks(bookmark_ids: list[str], *, keep_rows: bool = False) -> list[dict]:
+    """Forget bookmarks, with everything kept for them.
 
-    Removes the bookmark rows, their jobs, exclusions and queue history; returns
-    the deleted job rows so the caller can remove their audio files.
+    Removes the jobs, exclusions and queue history, and the bookmark rows
+    unless `keep_rows`, which marks them finished instead so their stored
+    versions still match Readeck's and a sync does not read them again.
+    Returns the deleted job rows so the caller can remove their audio files.
     """
     deleted_jobs: list[dict] = []
     async with _connect() as db:
@@ -586,11 +619,14 @@ async def delete_bookmarks(bookmark_ids: list[str]) -> list[dict]:
                 f"DELETE FROM jobs WHERE bookmark_id IN ({placeholders}) RETURNING *", params
             ) as cur:
                 deleted_jobs.extend(dict(r) for r in await cur.fetchall())
-            for table, column in (
-                ("bookmarks", "id"),
-                ("auto_excluded", "bookmark_id"),
-                ("queued_bookmarks", "bookmark_id"),
-            ):
+            tables = [("auto_excluded", "bookmark_id"), ("queued_bookmarks", "bookmark_id")]
+            if keep_rows:
+                await db.execute(
+                    f"UPDATE bookmarks SET finished = 1 WHERE id IN ({placeholders})", params
+                )
+            else:
+                tables.append(("bookmarks", "id"))
+            for table, column in tables:
                 await db.execute(f"DELETE FROM {table} WHERE {column} IN ({placeholders})", params)
     return deleted_jobs
 
@@ -626,6 +662,7 @@ async def query_bookmarks(
     published_from: str | None = None,
     published_to: str | None = None,
     has_audio: bool | None = None,
+    has_article: bool | None = None,
     excluded: bool | None = None,
     limit: int = 30,
     offset: int = 0,
@@ -658,6 +695,9 @@ async def query_bookmarks(
         params.append(published_to)
     if has_audio is not None:
         where.append(_HAS_AUDIO if has_audio else f"NOT {_HAS_AUDIO}")
+    if has_article is not None:
+        where.append("b.has_article = ?")
+        params.append(1 if has_article else 0)
     if excluded is not None:
         where.append(_IS_EXCLUDED if excluded else f"NOT {_IS_EXCLUDED}")
     clause = " AND ".join(where)
@@ -677,7 +717,7 @@ async def auto_generation_candidates(created_from: str | None = None) -> list[di
     """Articles never queued and not excluded, oldest first."""
     sql = (
         f"SELECT b.* FROM bookmarks b WHERE {_VISIBLE} AND b.type = 'article' "
-        f"AND NOT {_IS_EXCLUDED} "
+        f"AND b.has_article = 1 AND NOT {_IS_EXCLUDED} "
         "AND NOT EXISTS (SELECT 1 FROM queued_bookmarks q WHERE q.bookmark_id = b.id)"
     )
     params: tuple = ()
