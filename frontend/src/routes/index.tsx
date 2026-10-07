@@ -70,7 +70,11 @@ function BookmarksPage() {
       />
 
       {selected.size > 0 && (
-        <SelectionBar selected={selection} onClear={() => setSelected(new Map())} />
+        <SelectionBar
+          selected={selection}
+          onClear={() => setSelected(new Map())}
+          onDeselect={deselect}
+        />
       )}
 
       {bookmarks.isPending ? (

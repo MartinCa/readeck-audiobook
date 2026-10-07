@@ -512,6 +512,8 @@ export interface components {
     ReadeckActionResult: {
       /** Count */
       count: number;
+      /** Doneids */
+      doneIds: string[];
       /** Failed */
       failed: number;
     };

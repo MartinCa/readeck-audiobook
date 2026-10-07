@@ -482,7 +482,7 @@ async def test_archive_in_readeck_removes_the_bookmark_and_its_audio(
     monkeypatch.setattr(readeck, "archive_bookmark", archive)
 
     resp = await client.post("/api/bookmarks/readeck/archive", json={"bookmarkIds": ["a"]})
-    assert resp.json() == {"count": 1, "failed": 0}
+    assert resp.json() == {"count": 1, "failed": 0, "doneIds": ["a"]}
     archive.assert_awaited_once_with("a")
     assert not (audio_dir / "a.mp3").exists()
     items = (await client.get("/api/bookmarks")).json()["items"]
@@ -496,7 +496,7 @@ async def test_delete_in_readeck_forgets_the_bookmark(client, stored, audio_dir,
     monkeypatch.setattr(readeck, "delete_bookmark", AsyncMock())
 
     resp = await client.post("/api/bookmarks/readeck/delete", json={"bookmarkIds": ["a"]})
-    assert resp.json() == {"count": 1, "failed": 0}
+    assert resp.json() == {"count": 1, "failed": 0, "doneIds": ["a"]}
     assert await models.get_bookmark_rows(["a"]) == {}
     assert not (audio_dir / "a.mp3").exists()
 
@@ -507,7 +507,7 @@ async def test_a_bookmark_already_gone_from_readeck_counts_as_deleted(client, st
         readeck, "delete_bookmark", AsyncMock(side_effect=readeck.BookmarkGone("gone"))
     )
     resp = await client.post("/api/bookmarks/readeck/delete", json={"bookmarkIds": ["a"]})
-    assert resp.json() == {"count": 1, "failed": 0}
+    assert resp.json() == {"count": 1, "failed": 0, "doneIds": ["a"]}
     assert await models.get_bookmark_rows(["a"]) == {}
 
 
@@ -524,7 +524,7 @@ async def test_a_failed_readeck_action_leaves_the_bookmark_untouched(
 
     monkeypatch.setattr(readeck, "archive_bookmark", flaky)
     resp = await client.post("/api/bookmarks/readeck/archive", json={"bookmarkIds": ["a", "b"]})
-    assert resp.json() == {"count": 1, "failed": 1}
+    assert resp.json() == {"count": 1, "failed": 1, "doneIds": ["b"]}
     assert (audio_dir / "a.mp3").exists()
     items = (await client.get("/api/bookmarks")).json()["items"]
     assert [i["id"] for i in items] == ["a"]

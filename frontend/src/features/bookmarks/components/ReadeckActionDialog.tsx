@@ -10,7 +10,7 @@ interface ReadeckActionDialogProps {
   action: ReadeckAction | null;
   ids: string[];
   onClose: () => void;
-  /** Called with the ids once the action ran, so a selection can drop them. */
+  /** Called with the ids the action worked for, so a selection can drop them. */
   onDone: (ids: string[]) => void;
 }
 
@@ -40,14 +40,15 @@ export function ReadeckActionDialog({ action, ids, onClose, onDone }: ReadeckAct
     if (!action) return;
     const verb = action === "delete" ? "Deleted" : "Archived";
     mutation.mutate(ids, {
-      onSuccess: ({ count, failed }) => {
+      onSuccess: ({ count, failed, doneIds }) => {
         if (count > 0) notifications.success(`${verb} ${plural(count, "bookmark")} in Readeck`);
         if (failed > 0) {
           notifications.error(`${plural(failed, "bookmark")} could not be changed in Readeck`, {
             description: "They are unchanged here. Check that Readeck is reachable and try again.",
           });
         }
-        if (count > 0) onDone(ids);
+        // Only the bookmarks Readeck accepted: the others stay selected to retry.
+        if (doneIds.length > 0) onDone(doneIds);
         onClose();
       },
       onError: (error) =>

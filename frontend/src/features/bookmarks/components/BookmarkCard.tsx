@@ -28,6 +28,7 @@ import {
   ReadeckActionDialog,
   type ReadeckAction,
 } from "@/features/bookmarks/components/ReadeckActionDialog";
+import { describeQueueResult } from "@/features/bookmarks/queueMessage";
 import { useGenerateAudio } from "@/features/bookmarks/hooks";
 import { notifications } from "@/lib/notifications";
 import { formatDateTime, formatDay, formatDuration, formatUtcDay } from "@/lib/format";
@@ -63,10 +64,9 @@ export function BookmarkCard({
 
   function onGenerate() {
     generate.mutate([bookmark.id], {
-      onSuccess: ({ queued, noArticle }) => {
-        if (queued > 0) notifications.success("Queued for audio");
-        else if (noArticle > 0) notifications.warning("Readeck has no article text to read out");
-        else notifications.info("Already queued or generating");
+      onSuccess: (result) => {
+        const { kind, title, description } = describeQueueResult(result);
+        notifications[kind](title, { ...(description && { description }) });
       },
       onError: (error) =>
         notifications.error("Could not queue audio generation", { description: error.message }),

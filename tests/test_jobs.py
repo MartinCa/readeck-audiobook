@@ -344,6 +344,7 @@ class TestDuration:
     async def test_backfill_measures_audio_that_has_no_length_yet(self, monkeypatch, audio_dir):
         job = await _queue()
         await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="old.mp3")
+        (audio_dir / "old.mp3").write_bytes(b"x")
         pending = await _queue(bookmark_id="bm2")
         monkeypatch.setattr(jobs.tts, "audio_duration", lambda path: 60.0)
         assert await jobs.backfill_durations() == 1
@@ -353,9 +354,25 @@ class TestDuration:
 
     async def test_backfill_skips_audio_it_cannot_read(self, monkeypatch, audio_dir):
         job = await _queue()
-        await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="gone.mp3")
+        await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="bad.mp3")
+        (audio_dir / "bad.mp3").write_bytes(b"not audio")
         monkeypatch.setattr(jobs.tts, "audio_duration", lambda path: None)
         assert await jobs.backfill_durations() == 0
+        assert (await models.get_job(job["id"]))["duration_seconds"] is None
+
+    async def test_backfill_leaves_a_missing_file_alone_and_quiet(
+        self, monkeypatch, audio_dir, caplog
+    ):
+        job = await _queue()
+        await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="gone.mp3")
+
+        def explode(path):
+            raise AssertionError("a missing file must not be opened")
+
+        monkeypatch.setattr(jobs.tts, "audio_duration", explode)
+        with caplog.at_level("WARNING"):
+            assert await jobs.backfill_durations() == 0
+        assert not caplog.records
         assert (await models.get_job(job["id"]))["duration_seconds"] is None
 
 

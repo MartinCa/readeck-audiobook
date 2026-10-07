@@ -244,7 +244,7 @@ async def archive_in_readeck(body: BookmarkIds):
     done, failed = await jobs.apply_readeck_action(
         readeck.archive_bookmark, body.bookmark_ids, keep_rows=True
     )
-    return ReadeckActionResult(count=done, failed=failed)
+    return ReadeckActionResult(count=len(done), failed=failed, done_ids=done)
 
 
 @app.post("/api/bookmarks/readeck/delete", response_model=ReadeckActionResult)
@@ -253,7 +253,7 @@ async def delete_in_readeck(body: BookmarkIds):
     done, failed = await jobs.apply_readeck_action(
         readeck.delete_bookmark, body.bookmark_ids, keep_rows=False
     )
-    return ReadeckActionResult(count=done, failed=failed)
+    return ReadeckActionResult(count=len(done), failed=failed, done_ids=done)
 
 
 # ── Jobs ───────────────────────────────────────────────────────────────────────

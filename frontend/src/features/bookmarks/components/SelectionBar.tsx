@@ -13,6 +13,7 @@ import {
   ReadeckActionDialog,
   type ReadeckAction,
 } from "@/features/bookmarks/components/ReadeckActionDialog";
+import { describeQueueResult } from "@/features/bookmarks/queueMessage";
 import { useDeleteAudio, useGenerateAudio, useSetAutoExcluded } from "@/features/bookmarks/hooks";
 import { ApiError } from "@/lib/api";
 import { plural } from "@/lib/format";
@@ -22,6 +23,8 @@ import type { Bookmark } from "@/lib/types";
 interface SelectionBarProps {
   selected: Bookmark[];
   onClear: () => void;
+  /** Drops these bookmarks from the selection, leaving any others selected. */
+  onDeselect: (ids: string[]) => void;
 }
 
 function describeError(error: unknown): string {
@@ -29,7 +32,7 @@ function describeError(error: unknown): string {
 }
 
 /** Actions on the selected bookmarks; each shows only when it applies. */
-export function SelectionBar({ selected, onClear }: SelectionBarProps) {
+export function SelectionBar({ selected, onClear, onDeselect }: SelectionBarProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [readeckAction, setReadeckAction] = useState<ReadeckAction | null>(null);
   const generate = useGenerateAudio();
@@ -44,15 +47,11 @@ export function SelectionBar({ selected, onClear }: SelectionBarProps) {
 
   function onGenerate() {
     generate.mutate(ids, {
-      onSuccess: ({ queued, skipped, noArticle }) => {
-        const notes = [
-          skipped > 0 && `${skipped} already queued or generating`,
-          noArticle > 0 && `${noArticle} without article text in Readeck`,
-        ].filter(Boolean);
-        notifications.success(`Queued ${plural(queued, "bookmark")} for audio`, {
-          ...(notes.length > 0 && { description: `Skipped: ${notes.join(", ")}.` }),
-        });
-        onClear();
+      onSuccess: (result) => {
+        const { kind, title, description } = describeQueueResult(result);
+        notifications[kind](title, { ...(description && { description }) });
+        // Keep the selection when nothing was queued, so it can be adjusted.
+        if (result.queued > 0) onClear();
       },
       onError: (error) =>
         notifications.error("Could not queue audio generation", {
@@ -162,7 +161,7 @@ export function SelectionBar({ selected, onClear }: SelectionBarProps) {
         action={readeckAction}
         ids={ids}
         onClose={() => setReadeckAction(null)}
-        onDone={onClear}
+        onDone={onDeselect}
       />
       <ConfirmDialog
         open={confirmDelete}

@@ -220,6 +220,8 @@ class ReadeckActionResult(ApiModel):
 
     count: int
     failed: int
+    # The bookmarks it worked for, so a caller can keep the rest selected to retry.
+    done_ids: list[str]
 
 
 class CountResult(ApiModel):

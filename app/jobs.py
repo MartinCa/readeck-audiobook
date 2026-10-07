@@ -102,11 +102,12 @@ async def forget_bookmarks(bookmark_ids: list[str], *, keep_rows: bool = False) 
 
 async def apply_readeck_action(
     action: Callable[[str], Awaitable[None]], bookmark_ids: list[str], *, keep_rows: bool
-) -> tuple[int, int]:
+) -> tuple[list[str], int]:
     """Run a Readeck action on each bookmark, then forget the ones it worked for here.
 
     A bookmark already gone from Readeck counts as done: that is the state the
-    action was after. Returns (done, failed); a failed bookmark is left alone.
+    action was after. Returns (ids done, number failed); a failed bookmark is left
+    alone.
     """
     ids = list(dict.fromkeys(bookmark_ids))
     limiter = asyncio.Semaphore(4)
@@ -125,14 +126,20 @@ async def apply_readeck_action(
     outcomes = await asyncio.gather(*(attempt(bid) for bid in ids))
     done = [bid for bid, ok in zip(ids, outcomes, strict=True) if ok]
     await forget_bookmarks(done, keep_rows=keep_rows)
-    return len(done), len(ids) - len(done)
+    return done, len(ids) - len(done)
 
 
 async def backfill_durations() -> int:
     """Measure audio generated before lengths were recorded; returns how many."""
     measured = 0
     for job_id, filename in await models.audio_missing_duration():
-        seconds = await asyncio.to_thread(tts.audio_duration, tts.AUDIO_DIR / Path(filename).name)
+        path = tts.AUDIO_DIR / Path(filename).name
+        if not path.is_file():
+            # A row whose file is gone can never be measured; leave it quietly
+            # rather than warn about it on every start.
+            logger.debug("Audio file %s is missing; skipping its length", path.name)
+            continue
+        seconds = await asyncio.to_thread(tts.audio_duration, path)
         if seconds is not None:
             await models.update_job(job_id, duration_seconds=seconds)
             measured += 1

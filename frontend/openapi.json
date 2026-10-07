@@ -682,6 +682,13 @@
             "title": "Count",
             "type": "integer"
           },
+          "doneIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Doneids",
+            "type": "array"
+          },
           "failed": {
             "title": "Failed",
             "type": "integer"
@@ -689,7 +696,8 @@
         },
         "required": [
           "count",
-          "failed"
+          "failed",
+          "doneIds"
         ],
         "title": "ReadeckActionResult",
         "type": "object"
