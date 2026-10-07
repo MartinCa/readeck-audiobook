@@ -67,10 +67,11 @@ async def _process_job(job: dict):
         )
 
 
-async def forget_bookmarks(bookmark_ids: list[str]) -> None:
-    """Drop bookmarks deleted in Readeck: their rows, jobs and audio files."""
+async def forget_bookmarks(bookmark_ids: list[str], *, keep_rows: bool = False) -> None:
+    """Drop bookmarks deleted, archived or read in Readeck: jobs, audio files and,
+    unless `keep_rows`, the bookmark rows."""
     if bookmark_ids:
-        remove_audio_files(await models.delete_bookmarks(bookmark_ids))
+        remove_audio_files(await models.delete_bookmarks(bookmark_ids, keep_rows=keep_rows))
 
 
 def remove_audio_files(job_rows: list[dict]) -> None:

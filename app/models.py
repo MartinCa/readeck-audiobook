@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS bookmarks (
     created         TEXT NOT NULL,
     loaded          INTEGER NOT NULL DEFAULT 1,
     is_deleted      INTEGER NOT NULL DEFAULT 0,
+    finished        INTEGER NOT NULL DEFAULT 0,
     readeck_updated TEXT NOT NULL DEFAULT '',
     synced_at       TEXT NOT NULL
 );
@@ -85,6 +86,12 @@ _MIGRATIONS = {
     "attempts": "ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
     "progress_done": "ALTER TABLE jobs ADD COLUMN progress_done INTEGER",
     "progress_total": "ALTER TABLE jobs ADD COLUMN progress_total INTEGER",
+}
+# The same for the bookmarks table. A bookmark synced before `finished` existed
+# has to be read again to learn whether it is archived or read, so adding the
+# column also clears the stored versions.
+_BOOKMARK_MIGRATIONS = {
+    "finished": "ALTER TABLE bookmarks ADD COLUMN finished INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -130,6 +137,12 @@ async def init_db():
         for column, statement in _MIGRATIONS.items():
             if column not in existing:
                 await db.execute(statement)
+        async with db.execute("PRAGMA table_info(bookmarks)") as cur:
+            existing = {row[1] for row in await cur.fetchall()}
+        for column, statement in _BOOKMARK_MIGRATIONS.items():
+            if column not in existing:
+                await db.execute(statement)
+                await db.execute("UPDATE bookmarks SET readeck_updated = ''")
         # Databases from before queued_bookmarks existed: their jobs count.
         await db.execute(
             "INSERT OR IGNORE INTO queued_bookmarks (bookmark_id, first_queued_at) "
@@ -535,13 +548,14 @@ _BOOKMARK_COLUMNS = (
     "created",
     "loaded",
     "is_deleted",
+    "finished",
     "readeck_updated",
     "synced_at",
 )
 
-# A bookmark worth showing: Readeck has finished fetching it and it is not on
-# its way to the bin.
-_VISIBLE = "b.loaded = 1 AND b.is_deleted = 0"
+# A bookmark worth showing: Readeck has finished fetching it, it is not on its
+# way to the bin, and it is neither archived nor read (`finished`).
+_VISIBLE = "b.loaded = 1 AND b.is_deleted = 0 AND b.finished = 0"
 _HAS_AUDIO = (
     "EXISTS (SELECT 1 FROM jobs j WHERE j.bookmark_id = b.id AND j.status = 'completed' "
     "AND j.audio_path IS NOT NULL AND j.audio_path != '')"
@@ -571,11 +585,13 @@ async def upsert_bookmarks(rows: list[dict]) -> None:
         await db.execute("COMMIT")
 
 
-async def delete_bookmarks(bookmark_ids: list[str]) -> list[dict]:
-    """Forget bookmarks that are gone from Readeck, with everything kept for them.
+async def delete_bookmarks(bookmark_ids: list[str], *, keep_rows: bool = False) -> list[dict]:
+    """Forget bookmarks, with everything kept for them.
 
-    Removes the bookmark rows, their jobs, exclusions and queue history; returns
-    the deleted job rows so the caller can remove their audio files.
+    Removes the jobs, exclusions and queue history, and the bookmark rows
+    unless `keep_rows`, which marks them finished instead so their stored
+    versions still match Readeck's and a sync does not read them again.
+    Returns the deleted job rows so the caller can remove their audio files.
     """
     deleted_jobs: list[dict] = []
     async with _connect() as db:
@@ -586,11 +602,14 @@ async def delete_bookmarks(bookmark_ids: list[str]) -> list[dict]:
                 f"DELETE FROM jobs WHERE bookmark_id IN ({placeholders}) RETURNING *", params
             ) as cur:
                 deleted_jobs.extend(dict(r) for r in await cur.fetchall())
-            for table, column in (
-                ("bookmarks", "id"),
-                ("auto_excluded", "bookmark_id"),
-                ("queued_bookmarks", "bookmark_id"),
-            ):
+            tables = [("auto_excluded", "bookmark_id"), ("queued_bookmarks", "bookmark_id")]
+            if keep_rows:
+                await db.execute(
+                    f"UPDATE bookmarks SET finished = 1 WHERE id IN ({placeholders})", params
+                )
+            else:
+                tables.append(("bookmarks", "id"))
+            for table, column in tables:
                 await db.execute(f"DELETE FROM {table} WHERE {column} IN ({placeholders})", params)
     return deleted_jobs
 
