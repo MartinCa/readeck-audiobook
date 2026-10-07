@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS bookmarks (
     loaded          INTEGER NOT NULL DEFAULT 1,
     is_deleted      INTEGER NOT NULL DEFAULT 0,
     finished        INTEGER NOT NULL DEFAULT 0,
+    has_article     INTEGER NOT NULL DEFAULT 1,
     readeck_updated TEXT NOT NULL DEFAULT '',
     synced_at       TEXT NOT NULL
 );
@@ -92,6 +93,7 @@ _MIGRATIONS = {
 # column also clears the stored versions.
 _BOOKMARK_MIGRATIONS = {
     "finished": "ALTER TABLE bookmarks ADD COLUMN finished INTEGER NOT NULL DEFAULT 0",
+    "has_article": "ALTER TABLE bookmarks ADD COLUMN has_article INTEGER NOT NULL DEFAULT 1",
 }
 
 
@@ -549,6 +551,7 @@ _BOOKMARK_COLUMNS = (
     "loaded",
     "is_deleted",
     "finished",
+    "has_article",
     "readeck_updated",
     "synced_at",
 )
@@ -696,7 +699,7 @@ async def auto_generation_candidates(created_from: str | None = None) -> list[di
     """Articles never queued and not excluded, oldest first."""
     sql = (
         f"SELECT b.* FROM bookmarks b WHERE {_VISIBLE} AND b.type = 'article' "
-        f"AND NOT {_IS_EXCLUDED} "
+        f"AND b.has_article = 1 AND NOT {_IS_EXCLUDED} "
         "AND NOT EXISTS (SELECT 1 FROM queued_bookmarks q WHERE q.bookmark_id = b.id)"
     )
     params: tuple = ()

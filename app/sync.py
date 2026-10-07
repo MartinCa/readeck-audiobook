@@ -107,6 +107,8 @@ def to_row(bm: dict[str, Any], readeck_updated: str, synced_at: str) -> dict[str
         "loaded": 1 if bm.get("loaded", True) else 0,
         "is_deleted": 1 if bm.get("is_deleted") else 0,
         "finished": 1 if is_finished(bm) else 0,
+        # Readeck found no article text (a paywall, say); there is nothing to read out.
+        "has_article": 0 if bm.get("has_article") is False else 1,
         "readeck_updated": readeck_updated,
         "synced_at": synced_at,
     }

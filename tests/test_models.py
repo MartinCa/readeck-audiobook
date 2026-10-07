@@ -436,6 +436,34 @@ async def test_init_db_migrates_a_database_without_the_new_columns(tmp_path, mon
     assert job["attempts"] == 0
 
 
+async def test_init_db_adds_bookmark_columns_and_clears_versions(tmp_path, monkeypatch):
+    """Bookmarks synced before `finished` existed are read again to learn their state."""
+    import aiosqlite
+
+    path = tmp_path / "legacy.db"
+    monkeypatch.setattr(models, "DB_PATH", str(path))
+    async with aiosqlite.connect(str(path)) as legacy:
+        await legacy.execute(
+            "CREATE TABLE bookmarks (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', "
+            "url TEXT NOT NULL DEFAULT '', site_name TEXT NOT NULL DEFAULT '', "
+            "authors TEXT NOT NULL DEFAULT '[]', lang TEXT NOT NULL DEFAULT '', "
+            "type TEXT NOT NULL DEFAULT '', reading_time INTEGER, "
+            "description TEXT NOT NULL DEFAULT '', published TEXT, created TEXT NOT NULL, "
+            "loaded INTEGER NOT NULL DEFAULT 1, is_deleted INTEGER NOT NULL DEFAULT 0, "
+            "readeck_updated TEXT NOT NULL DEFAULT '', synced_at TEXT NOT NULL)"
+        )
+        await legacy.execute(
+            "INSERT INTO bookmarks (id, created, readeck_updated, synced_at) "
+            "VALUES ('a', '2026-01-01', 'v1', '2026-01-01')"
+        )
+        await legacy.commit()
+
+    await models.init_db()
+    await models.init_db()  # a second start must not clear versions again
+    row = (await models.get_bookmark_rows(["a"]))["a"]
+    assert (row["finished"], row["has_article"], row["readeck_updated"]) == (0, 1, "")
+
+
 # ── Audio, exclusion and settings ──────────────────────────────────────────────
 
 

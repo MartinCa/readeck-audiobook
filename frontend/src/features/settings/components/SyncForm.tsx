@@ -56,8 +56,8 @@ export function SyncForm({ status }: { status: SyncStatus }) {
         <CardTitle>Readeck sync</CardTitle>
         <CardDescription>
           Bookmarks are copied from Readeck so the list stays fast with thousands of them. Each sync
-          picks up new and changed bookmarks, and removes the ones deleted in Readeck along with
-          their audio.
+          picks up new and changed bookmarks, and removes the ones deleted, archived or marked read
+          in Readeck along with their audio.
         </CardDescription>
       </CardHeader>
       <CardContent>

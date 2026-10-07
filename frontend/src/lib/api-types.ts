@@ -89,6 +89,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/bookmarks/readeck/archive": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Archive In Readeck
+     * @description Mark read and archive in Readeck, then drop the bookmark and its audio here.
+     */
+    post: operations["archive_in_readeck_api_bookmarks_readeck_archive_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/bookmarks/readeck/delete": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Delete In Readeck
+     * @description Delete from Readeck, then drop the bookmark and its audio here.
+     */
+    post: operations["delete_in_readeck_api_bookmarks_readeck_delete_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/jobs": {
     parameters: {
       query?: never;
@@ -308,6 +348,8 @@ export interface components {
       autoExcluded: boolean;
       /** Description */
       description: string;
+      /** Hasarticle */
+      hasArticle: boolean;
       /** Id */
       id: string;
       job: components["schemas"]["BookmarkJob"] | null;
@@ -315,6 +357,8 @@ export interface components {
       lang: string;
       /** Published */
       published: string | null;
+      /** Readeckurl */
+      readeckUrl: string;
       /** Readingtime */
       readingTime: number | null;
       /** Sitename */
@@ -367,6 +411,11 @@ export interface components {
      * @enum {string}
      */
     ExclusionFilter: "any" | "excluded" | "included";
+    /** GenerationSettings */
+    GenerationSettings: {
+      /** Minarticlewords */
+      minArticleWords: number;
+    };
     /** HTTPValidationError */
     HTTPValidationError: {
       /** Detail */
@@ -439,14 +488,30 @@ export interface components {
     };
     /** QueueResult */
     QueueResult: {
+      /**
+       * Noarticle
+       * @default 0
+       */
+      noArticle: number;
       /** Queued */
       queued: number;
       /** Skipped */
       skipped: number;
     };
+    /**
+     * ReadeckActionResult
+     * @description How a bulk Readeck action went; a failed bookmark is left as it was.
+     */
+    ReadeckActionResult: {
+      /** Count */
+      count: number;
+      /** Failed */
+      failed: number;
+    };
     /** Settings */
     Settings: {
       autoGeneration: components["schemas"]["AutoGenerationStatus"];
+      generation: components["schemas"]["GenerationSettings"];
       sync: components["schemas"]["SyncStatus"];
     };
     /**
@@ -455,6 +520,7 @@ export interface components {
      */
     SettingsUpdate: {
       autoGeneration?: components["schemas"]["AutoGenerationSettings"] | null;
+      generation?: components["schemas"]["GenerationSettings"] | null;
       sync?: components["schemas"]["SyncSettings"] | null;
     };
     /** SyncSettings */
@@ -647,6 +713,72 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["CountResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  archive_in_readeck_api_bookmarks_readeck_archive_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["BookmarkIds"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReadeckActionResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  delete_in_readeck_api_bookmarks_readeck_delete_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["BookmarkIds"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReadeckActionResult"];
         };
       };
       /** @description Validation Error */

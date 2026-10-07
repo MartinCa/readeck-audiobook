@@ -261,3 +261,35 @@ async def test_list_all_bookmarks_drops_a_duplicate_from_a_shifted_page():
     respx.get("http://readeck.test/api/bookmarks").mock(side_effect=page)
     items = await readeck.list_all_bookmarks()
     assert [b["id"] for b in items] == ["a", "b", "c"]
+
+
+@respx.mock
+async def test_archive_bookmark_marks_it_read_and_archived():
+    route = respx.patch("http://readeck.test/api/bookmarks/abc").mock(
+        return_value=httpx.Response(200, json={"id": "abc"})
+    )
+    await readeck.archive_bookmark("abc")
+    assert route.calls[0].request.content == b'{"is_archived":true,"read_progress":100}'
+
+
+@respx.mock
+async def test_archive_bookmark_reports_one_that_is_gone():
+    respx.patch("http://readeck.test/api/bookmarks/abc").mock(return_value=httpx.Response(404))
+    with pytest.raises(readeck.BookmarkGone):
+        await readeck.archive_bookmark("abc")
+
+
+@respx.mock
+async def test_delete_bookmark():
+    route = respx.delete("http://readeck.test/api/bookmarks/abc").mock(
+        return_value=httpx.Response(204)
+    )
+    await readeck.delete_bookmark("abc")
+    assert route.called
+
+
+@respx.mock
+async def test_delete_bookmark_describes_a_server_error():
+    respx.delete("http://readeck.test/api/bookmarks/abc").mock(return_value=httpx.Response(500))
+    with pytest.raises(readeck.ReadeckError, match="HTTP 500"):
+        await readeck.delete_bookmark("abc")

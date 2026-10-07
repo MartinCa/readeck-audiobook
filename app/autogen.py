@@ -80,11 +80,11 @@ async def run_once(settings: AutoGenSettings | None = None) -> tuple[int, int]:
         eligible = await models.auto_generation_candidates(
             f"{settings.since.isoformat()}T00:00:00+00:00" if settings.since else None
         )
-        queued, skipped = await jobs.queue_bookmarks([bm["id"] for bm in eligible])
-        state.last_queued = queued
-        if queued:
-            logger.info("Auto generation queued %d bookmark(s)", queued)
-        return queued, skipped
+        outcome = await jobs.queue_bookmarks([bm["id"] for bm in eligible])
+        state.last_queued = outcome.queued
+        if outcome.queued:
+            logger.info("Auto generation queued %d bookmark(s)", outcome.queued)
+        return outcome.queued, outcome.skipped
     except Exception as exc:
         state.last_error = str(exc)
         raise

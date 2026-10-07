@@ -45,6 +45,14 @@ function BookmarksPage() {
     });
   }
 
+  function deselect(ids: string[]) {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
+  }
+
   const items = bookmarks.data?.items ?? [];
   // Prefer the freshest copy: polling can add audio to a selected bookmark.
   const current = new Map(items.map((b) => [b.id, b]));
@@ -113,6 +121,7 @@ function BookmarksPage() {
                   bookmark={bookmark}
                   selected={selected.has(bookmark.id)}
                   onSelectedChange={(on) => toggle([bookmark], on)}
+                  onRemoved={deselect}
                 />
               </li>
             ))}

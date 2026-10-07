@@ -232,11 +232,37 @@ def _clean_block_markup(text: str) -> str:
     return "\n".join(out)
 
 
+_FRONT_MATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
+_FRONT_MATTER_LINE = re.compile(r"^(?:[\w-]+:.*|[ \t]+\S.*|[ \t]*-[ \t].*|)$")
+
+
+def strip_front_matter(text: str) -> str:
+    """Drop the YAML header Readeck puts on its Markdown export.
+
+    The block between two `---` lines only counts when every line looks like
+    YAML, so an article that opens with a horizontal rule keeps its content.
+    """
+    match = _FRONT_MATTER.match(text.replace("\r\n", "\n"))
+    if match and all(_FRONT_MATTER_LINE.match(line) for line in match.group(1).split("\n")):
+        return text.replace("\r\n", "\n")[match.end() :]
+    return text
+
+
+def count_words(text: str) -> int:
+    """Words of article text worth reading out: no header, no title heading, no markup."""
+    body = strip_front_matter(text).lstrip()
+    # Readeck repeats the title as a heading ahead of the article.
+    if body.startswith("#"):
+        body = body.partition("\n")[2]
+    return len(re.findall(r"\w+", _clean_markdown(body)))
+
+
 def _clean_markdown(text: str) -> str:
     """Strip Markdown formatting so TTS reads cleaner text."""
     if not text:
         return ""
 
+    text = strip_front_matter(text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = _HTML_COMMENT.sub("", text)
     text = _FENCED_CODE.sub("\n", text)

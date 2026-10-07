@@ -20,11 +20,13 @@ from app.schemas import (
     BookmarkIds,
     BookmarkPage,
     CountResult,
+    GenerationSettings,
     Health,
     Job,
     JobIds,
     JobPage,
     QueueResult,
+    ReadeckActionResult,
     Settings,
     SettingsUpdate,
     SyncStatus,
@@ -230,13 +232,33 @@ async def set_auto_exclusion(body: AutoExclusionUpdate):
     return CountResult(count=len(ids))
 
 
+@app.post("/api/bookmarks/readeck/archive", response_model=ReadeckActionResult)
+async def archive_in_readeck(body: BookmarkIds):
+    """Mark read and archive in Readeck, then drop the bookmark and its audio here."""
+    done, failed = await jobs.apply_readeck_action(
+        readeck.archive_bookmark, body.bookmark_ids, keep_rows=True
+    )
+    return ReadeckActionResult(count=done, failed=failed)
+
+
+@app.post("/api/bookmarks/readeck/delete", response_model=ReadeckActionResult)
+async def delete_in_readeck(body: BookmarkIds):
+    """Delete from Readeck, then drop the bookmark and its audio here."""
+    done, failed = await jobs.apply_readeck_action(
+        readeck.delete_bookmark, body.bookmark_ids, keep_rows=False
+    )
+    return ReadeckActionResult(count=done, failed=failed)
+
+
 # ── Jobs ───────────────────────────────────────────────────────────────────────
 
 
 @app.post("/api/jobs", response_model=QueueResult)
 async def create_jobs(body: BookmarkIds):
-    queued, skipped = await jobs.queue_bookmarks(body.bookmark_ids)
-    return QueueResult(queued=queued, skipped=skipped)
+    outcome = await jobs.queue_bookmarks(body.bookmark_ids)
+    return QueueResult(
+        queued=outcome.queued, skipped=outcome.skipped, no_article=outcome.no_article
+    )
 
 
 @app.get("/api/jobs", response_model=JobPage)
@@ -330,6 +352,7 @@ async def _settings_response() -> Settings:
             last_queued=state.last_queued,
             last_error=state.last_error,
         ),
+        generation=GenerationSettings(min_article_words=await jobs.load_min_article_words()),
     )
 
 
@@ -357,6 +380,8 @@ async def update_settings(body: SettingsUpdate):
         await autogen.save_settings(
             autogen.AutoGenSettings(enabled=auto.enabled, since=auto.since, cron=auto_cron)
         )
+    if body.generation is not None:
+        await jobs.save_min_article_words(body.generation.min_article_words)
     return await _settings_response()
 
 

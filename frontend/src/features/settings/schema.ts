@@ -17,3 +17,14 @@ export type AutoGenerationForm = z.infer<typeof autoGenerationSchema>;
 export const syncSchema = z.object({ cron: cronField });
 
 export type SyncForm = z.infer<typeof syncSchema>;
+
+export const generationSchema = z.object({
+  // Kept as text while editing; the server takes a whole number up to 10000.
+  minArticleWords: z
+    .string()
+    .trim()
+    .regex(/^\d+$/, "Enter a whole number")
+    .refine((v) => Number(v) <= 10000, "At most 10000"),
+});
+
+export type GenerationForm = z.infer<typeof generationSchema>;

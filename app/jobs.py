@@ -3,6 +3,8 @@
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,10 +14,25 @@ logger = logging.getLogger(__name__)
 
 MAX_CONCURRENT = config.MAX_CONCURRENT_JOBS
 
+DEFAULT_MIN_ARTICLE_WORDS = 30
+
 _worker_task: asyncio.Task | None = None
 # Strong references to in-flight jobs. asyncio only holds tasks weakly, so a
 # task that nothing references can be garbage collected mid-execution.
 _inflight: set[asyncio.Task] = set()
+
+
+class ArticleTooShort(ValueError):
+    """Readeck handed over too little text to be worth an audiobook."""
+
+
+async def load_min_article_words() -> int:
+    raw = (await models.get_settings()).get("min_article_words")
+    return int(raw) if raw else DEFAULT_MIN_ARTICLE_WORDS
+
+
+async def save_min_article_words(words: int) -> None:
+    await models.set_settings({"min_article_words": str(words)})
 
 
 async def _process_job(job: dict):
@@ -23,6 +40,14 @@ async def _process_job(job: dict):
     # Job is already marked 'processing' by claim_next_pending_job
     try:
         text = await readeck.get_article_text(job["bookmark_id"])
+        # A failed extraction can still come back as a title and a stray
+        # character; reading that out would produce a useless audio file.
+        words, minimum = tts.count_words(text), await load_min_article_words()
+        if words < minimum:
+            raise ArticleTooShort(
+                f"Readeck extracted only {words} words of text (the minimum is {minimum}). "
+                "Re-extract the bookmark in Readeck, then retry."
+            )
         audio_path = await tts.generate_audio(
             job_id,
             text,
@@ -74,6 +99,34 @@ async def forget_bookmarks(bookmark_ids: list[str], *, keep_rows: bool = False) 
         remove_audio_files(await models.delete_bookmarks(bookmark_ids, keep_rows=keep_rows))
 
 
+async def apply_readeck_action(
+    action: Callable[[str], Awaitable[None]], bookmark_ids: list[str], *, keep_rows: bool
+) -> tuple[int, int]:
+    """Run a Readeck action on each bookmark, then forget the ones it worked for here.
+
+    A bookmark already gone from Readeck counts as done: that is the state the
+    action was after. Returns (done, failed); a failed bookmark is left alone.
+    """
+    ids = list(dict.fromkeys(bookmark_ids))
+    limiter = asyncio.Semaphore(4)
+
+    async def attempt(bookmark_id: str) -> bool:
+        async with limiter:
+            try:
+                await action(bookmark_id)
+            except readeck.BookmarkGone:
+                pass
+            except readeck.ReadeckError as exc:
+                logger.warning("Readeck action failed for bookmark %s: %s", bookmark_id, exc)
+                return False
+            return True
+
+    outcomes = await asyncio.gather(*(attempt(bid) for bid in ids))
+    done = [bid for bid, ok in zip(ids, outcomes, strict=True) if ok]
+    await forget_bookmarks(done, keep_rows=keep_rows)
+    return len(done), len(ids) - len(done)
+
+
 def remove_audio_files(job_rows: list[dict]) -> None:
     """Delete the audio files of job rows that have just been deleted."""
     for row in job_rows:
@@ -81,11 +134,19 @@ def remove_audio_files(job_rows: list[dict]) -> None:
             (tts.AUDIO_DIR / Path(row["audio_path"]).name).unlink(missing_ok=True)
 
 
-async def queue_bookmarks(bookmark_ids: list[str]) -> tuple[int, int]:
+@dataclass
+class QueueOutcome:
+    queued: int = 0
+    skipped: int = 0
+    # Bookmarks Readeck extracted no article from: nothing to read out.
+    no_article: int = 0
+
+
+async def queue_bookmarks(bookmark_ids: list[str]) -> QueueOutcome:
     """Queue a job per bookmark, skipping any with a job already pending or running.
 
     Titles and languages come from the local copy of Readeck; a bookmark not
-    synced yet is fetched. Returns (queued, skipped).
+    synced yet is fetched.
     """
     # De-duplicate while preserving order; a double submit can repeat ids.
     unique_ids = list(dict.fromkeys(bookmark_ids))
@@ -94,11 +155,13 @@ async def queue_bookmarks(bookmark_ids: list[str]) -> tuple[int, int]:
     bookmarks: dict[str, dict[str, Any]] = await models.get_bookmark_rows(queued_ids)
     # The language is stored on the job so the worker need not look it up.
     bookmarks.update(await readeck.get_bookmarks([b for b in queued_ids if b not in bookmarks]))
+    outcome = QueueOutcome()
+    readable = [bid for bid in queued_ids if has_article(bookmarks.get(bid, {}))]
+    outcome.no_article = len(queued_ids) - len(readable)
     # A new attempt replaces an earlier failure rather than piling up beside it.
-    await models.delete_failed_jobs(queued_ids)
+    await models.delete_failed_jobs(readable)
 
-    queued = 0
-    for bid in queued_ids:
+    for bid in readable:
         bm = bookmarks.get(bid, {})
         lang = bm.get("lang") or ""
         engine, voice = tts.resolve_engine_and_voice(lang)
@@ -114,8 +177,14 @@ async def queue_bookmarks(bookmark_ids: list[str]) -> tuple[int, int]:
             voice=voice,
             only_if_idle=True,
         )
-        queued += job is not None
-    return queued, len(unique_ids) - queued
+        outcome.queued += job is not None
+    outcome.skipped = len(unique_ids) - outcome.queued - outcome.no_article
+    return outcome
+
+
+def has_article(bookmark: dict[str, Any]) -> bool:
+    """Whether Readeck extracted article text; a row or Readeck's own JSON."""
+    return bookmark.get("has_article") not in (0, False)
 
 
 def _spawn(job: dict) -> asyncio.Task:

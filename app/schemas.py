@@ -11,6 +11,8 @@ from urllib.parse import quote, urlparse
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from app import config
+
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
@@ -141,6 +143,10 @@ class Bookmark(ApiModel):
     audio: Audio | None
     job: BookmarkJob | None
     auto_excluded: bool
+    # Whether Readeck extracted article text; without it there is nothing to read out.
+    has_article: bool
+    # The bookmark's page in Readeck, empty when READECK_BASE_URL is unset.
+    readeck_url: str
 
     @classmethod
     def from_item(cls, item: dict) -> "Bookmark":
@@ -169,6 +175,12 @@ class Bookmark(ApiModel):
                 else None
             ),
             auto_excluded=item["auto_excluded"],
+            has_article=item.get("has_article", 1) != 0,
+            readeck_url=(
+                f"{config.READECK_BASE_URL}/bookmarks/{quote(item['id'])}"
+                if config.READECK_BASE_URL
+                else ""
+            ),
         )
 
 
@@ -196,6 +208,15 @@ class AutoExclusionUpdate(ApiModel):
 class QueueResult(ApiModel):
     queued: int
     skipped: int
+    # Bookmarks Readeck extracted no article text from, which cannot be generated.
+    no_article: int = 0
+
+
+class ReadeckActionResult(ApiModel):
+    """How a bulk Readeck action went; a failed bookmark is left as it was."""
+
+    count: int
+    failed: int
 
 
 class CountResult(ApiModel):
@@ -230,9 +251,16 @@ class SyncStatus(SyncSettings):
     removed: int
 
 
+class GenerationSettings(ApiModel):
+    # An article with fewer words than this fails instead of becoming an
+    # audio file; it guards against a failed extraction.
+    min_article_words: int = Field(ge=0, le=10000)
+
+
 class Settings(ApiModel):
     sync: SyncStatus
     auto_generation: AutoGenerationStatus
+    generation: GenerationSettings
 
 
 class SettingsUpdate(ApiModel):
@@ -240,6 +268,7 @@ class SettingsUpdate(ApiModel):
 
     sync: SyncSettings | None = None
     auto_generation: AutoGenerationSettings | None = None
+    generation: GenerationSettings | None = None
 
 
 class Health(ApiModel):

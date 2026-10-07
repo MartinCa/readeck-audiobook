@@ -7,9 +7,11 @@ Browse your Readeck library, select articles, queue them for audio generation, a
 ## Features
 
 - Paginated, searchable bookmark browser for your Readeck instance, showing each article's publish date and the date it was added to Readeck
-- A local copy of the Readeck library, synced on its own cron schedule, so filtering stays fast with thousands of bookmarks; bookmarks deleted in Readeck are removed here too, audio included
+- A local copy of the Readeck library, synced on its own cron schedule, so filtering stays fast with thousands of bookmarks; bookmarks deleted, archived or marked read in Readeck are removed here too, audio included
 - Filters: has audio or not, excluded from auto generation or not, and optional start/end dates for when an article was published and when it was added to Readeck
 - Finished audio lives on its bookmark, with a player and a download link; bulk-delete audio or bulk-exclude bookmarks from auto generation
+- Readeck actions on a bookmark (its card menu, or the selection bar for several): open it in Readeck in a new tab, **mark read & archive** it, or **delete** it from Readeck — the last two also remove it, with its audio, from this app
+- A **Generate audio** button on each bookmark without audio, greyed out when Readeck extracted no article text
 - Optional **auto audio generation** on a cron schedule (see below)
 - Background TTS job queue; the Jobs page shows what is queued, generating or failed, updated live
 - Two TTS backends:
@@ -106,11 +108,15 @@ Any unlisted language falls back to `EDGE_TTS_VOICE`. The engine and voice are r
 
 The Bookmarks page and auto generation work from a local copy of your Readeck library in the app's database. The app syncs when it starts and then on a cron schedule you set under **Settings** (default `*/15 * * * *`, every 15 minutes, in the container's time zone). **Sync now** on the Settings page runs one immediately.
 
-A sync asks Readeck's sync endpoint for every bookmark id with its last-updated time in one request, then fetches only the bookmarks that are new or changed. A bookmark Readeck no longer has is checked once more and then removed here, along with its jobs and audio files. An older Readeck without the sync endpoint works too, at the cost of reading the full bookmark list each time.
+A sync asks Readeck's sync endpoint for every bookmark id with its last-updated time in one request, then fetches only the bookmarks that are new or changed. A bookmark Readeck no longer has is checked once more and then removed here, along with its jobs and audio files. A bookmark that is archived or read (progress 100) in Readeck is finished with too: it leaves the list and loses its jobs and audio, and un-archiving it in Readeck brings it back. An older Readeck without the sync endpoint works too, at the cost of reading the full bookmark list each time.
 
 Search on the Bookmarks page matches the title, site, authors, description and URL of the local copy, not the article text.
 
 If a bookmark is deleted in Readeck while its audio is queued or generating, the job is dropped quietly rather than reported as failed.
+
+## Failed extractions
+
+When Readeck cannot extract an article (a paywall, say) it keeps the bookmark but reports no article, and its Markdown export holds little more than the title. Such a bookmark shows a **No article text** badge, cannot be generated until Readeck re-extracts it, and is skipped by auto generation (which picks it up on its own once text appears). As a backstop, a job whose text has fewer words than **Minimum article length** under Settings (default 30; the metadata header and title do not count; 0 turns it off) fails with an error instead of producing an audio file.
 
 ## Auto audio generation
 
@@ -295,6 +301,8 @@ The API is JSON with camelCase fields; errors are `application/problem+json`. Th
 |---|---|---|
 | `GET` | `/api/bookmarks` | Bookmarks with their audio and job state; `page`, `search`, `audio` (`with`/`without`), `autoGeneration` (`excluded`/`included`), `addedFrom`, `addedTo`, `publishedFrom`, `publishedTo` (`YYYY-MM-DD`) |
 | `POST` | `/api/bookmarks/audio/delete` | Delete the audio of several bookmarks |
+| `POST` | `/api/bookmarks/readeck/archive` | Mark read and archive in Readeck, then remove the bookmarks and their audio here |
+| `POST` | `/api/bookmarks/readeck/delete` | Delete from Readeck, then remove the bookmarks and their audio here |
 | `PUT` | `/api/bookmarks/auto-generation` | Exclude bookmarks from, or include them in, auto generation |
 | `POST` | `/api/jobs` | Queue bookmarks for audio generation |
 | `GET` | `/api/jobs` | Queued, generating and failed jobs, paginated |
@@ -303,7 +311,7 @@ The API is JSON with camelCase fields; errors are `application/problem+json`. Th
 | `POST` | `/api/jobs/{id}/retry` | Queue a failed job again |
 | `DELETE` | `/api/jobs/{id}` | Delete a job and its audio file |
 | `POST` | `/api/jobs/bulk-delete` | Delete several jobs at once |
-| `GET` / `PUT` | `/api/settings` | Auto generation settings and its last/next run |
+| `GET` / `PUT` | `/api/settings` | Sync, auto generation and generation settings, with the last/next runs |
 | `POST` | `/api/auto-generation/run` | Run auto generation now |
 | `GET` | `/api/audio/{filename}` | Download generated MP3 |
 | `GET` | `/health` | Health check |

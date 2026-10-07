@@ -739,3 +739,31 @@ class TestTagging:
             "abcdef12-3456", "Hello there.", title="Tagged Read", engine="edge-tts", voice="v"
         )
         assert str(ID3(str(path))["TIT2"]) == "Tagged Read"
+
+
+READECK_STUB = (
+    "---\ntitle: Alternatives to GPS are around the corner\n"
+    'saved: "2026-09-27"\nwebsite: www.economist.com\n'
+    "source: https://www.economist.com/science-and-technology/2026/09/27/alternatives\n"
+    "labels:\n    - inbox\n---\n\n# Alternatives to GPS are around the corner\n\n~ $\n"
+)
+
+
+class TestFrontMatter:
+    def test_the_yaml_header_is_not_read_out(self):
+        cleaned = tts._clean_markdown(READECK_STUB)
+        assert "saved" not in cleaned
+        assert "economist" not in cleaned
+        assert cleaned.startswith("Alternatives to GPS are around the corner.")
+
+    def test_an_article_opening_with_a_rule_keeps_its_content(self):
+        text = "---\n\nSome prose here.\n\n---\n\nMore."
+        assert tts.strip_front_matter(text) == text
+        assert "Some prose here." in tts._clean_markdown(text)
+
+    def test_a_stub_has_no_words_of_its_own(self):
+        assert tts.count_words(READECK_STUB) == 0
+
+    def test_words_are_counted_without_header_title_or_markup(self):
+        text = "---\ntitle: T\n---\n\n# T\n\nOne **two** [three](http://x) four.\n"
+        assert tts.count_words(text) == 4

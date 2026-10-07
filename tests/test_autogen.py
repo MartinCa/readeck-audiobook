@@ -123,3 +123,35 @@ async def test_the_schedule_follows_the_enabled_setting():
     assert await autogen.schedule.cron() is None
     await autogen.save_settings(autogen.AutoGenSettings(enabled=True, cron="5 4 * * *"))
     assert await autogen.schedule.cron() == "5 4 * * *"
+
+
+async def test_run_waits_for_readeck_to_extract_an_article(articles, store_bookmarks):
+    await articles("a")
+    await store_bookmarks(
+        [
+            {
+                "id": "empty",
+                "title": "empty",
+                "url": "http://x",
+                "type": "article",
+                "created": "2026-01-09T12:00:00Z",
+                "has_article": False,
+            }
+        ]
+    )
+    assert await autogen.run_once() == (1, 0)
+    # Not recorded as queued, so it is eligible once Readeck extracts text.
+    await store_bookmarks(
+        [
+            {
+                "id": "empty",
+                "title": "empty",
+                "url": "http://x",
+                "type": "article",
+                "created": "2026-01-09T12:00:00Z",
+                "has_article": True,
+            }
+        ],
+        version="v2",
+    )
+    assert await autogen.run_once() == (1, 0)
