@@ -30,7 +30,7 @@ import {
 } from "@/features/bookmarks/components/ReadeckActionDialog";
 import { useGenerateAudio } from "@/features/bookmarks/hooks";
 import { notifications } from "@/lib/notifications";
-import { formatDateTime, formatDay, formatUtcDay } from "@/lib/format";
+import { formatDateTime, formatDay, formatDuration, formatUtcDay } from "@/lib/format";
 import type { Bookmark } from "@/lib/types";
 
 interface BookmarkCardProps {
@@ -54,6 +54,9 @@ export function BookmarkCard({
     bookmark.authors.join(", "),
     bookmark.readingTime ? `${bookmark.readingTime} min read` : "",
     bookmark.lang,
+    bookmark.audio?.durationSeconds != null
+      ? `Audio ${formatDuration(bookmark.audio.durationSeconds)}`
+      : "",
   ].filter(Boolean);
   const titleId = `bookmark-${bookmark.id}-title`;
   const generating = bookmark.job?.status === "pending" || bookmark.job?.status === "processing";

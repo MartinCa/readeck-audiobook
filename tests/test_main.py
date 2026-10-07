@@ -299,6 +299,28 @@ async def test_post_jobs_skips_bookmarks_without_an_article(client, stored):
     assert len(await models.list_job_ids()) == 1
 
 
+async def test_filter_by_article(client, stored):
+    await stored([_bookmark("a", has_article=False), _bookmark("b", has_article=True)])
+
+    async def ids(article: str) -> list[str]:
+        items = (await client.get("/api/bookmarks", params={"article": article})).json()["items"]
+        return [i["id"] for i in items]
+
+    assert await ids("without") == ["a"]
+    assert await ids("with") == ["b"]
+    assert sorted(await ids("any")) == ["a", "b"]
+
+
+async def test_bookmark_audio_reports_its_duration(client, stored):
+    await stored([_bookmark("a"), _bookmark("b")])
+    job = await _completed("a", "a.mp3")
+    await models.update_job(job["id"], duration_seconds=754.3)
+    await _completed("b", "b.mp3")
+    audio = {i["id"]: i["audio"] for i in (await client.get("/api/bookmarks")).json()["items"]}
+    assert audio["a"]["durationSeconds"] == 754.3
+    assert audio["b"]["durationSeconds"] is None
+
+
 async def test_post_jobs_requires_ids(client):
     resp = await client.post("/api/jobs", json={"bookmarkIds": []})
     assert resp.status_code == 422

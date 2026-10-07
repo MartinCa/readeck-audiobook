@@ -278,8 +278,15 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /**
+     * ArticleFilter
+     * @enum {string}
+     */
+    ArticleFilter: "any" | "with" | "without";
     /** Audio */
     Audio: {
+      /** Durationseconds */
+      durationSeconds: number | null;
       /** Filename */
       filename: string;
       /**
@@ -628,6 +635,7 @@ export interface operations {
         page?: number;
         search?: string;
         audio?: components["schemas"]["AudioFilter"];
+        article?: components["schemas"]["ArticleFilter"];
         autoGeneration?: components["schemas"]["ExclusionFilter"];
         addedFrom?: string | null;
         addedTo?: string | null;

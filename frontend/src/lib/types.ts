@@ -6,6 +6,7 @@ export type Bookmark = Schemas["Bookmark"];
 export type BookmarkPage = Schemas["BookmarkPage"];
 export type Audio = Schemas["Audio"];
 export type AudioFilter = Schemas["AudioFilter"];
+export type ArticleFilter = Schemas["ArticleFilter"];
 export type ExclusionFilter = Schemas["ExclusionFilter"];
 export type Job = Schemas["Job"];
 export type JobPage = Schemas["JobPage"];

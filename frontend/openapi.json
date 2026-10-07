@@ -1,8 +1,28 @@
 {
   "components": {
     "schemas": {
+      "ArticleFilter": {
+        "enum": [
+          "any",
+          "with",
+          "without"
+        ],
+        "title": "ArticleFilter",
+        "type": "string"
+      },
       "Audio": {
         "properties": {
+          "durationSeconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Durationseconds"
+          },
           "filename": {
             "title": "Filename",
             "type": "string"
@@ -35,7 +55,8 @@
           "url",
           "ttsEngine",
           "voice",
-          "generatedAt"
+          "generatedAt",
+          "durationSeconds"
         ],
         "title": "Audio",
         "type": "object"
@@ -953,6 +974,15 @@
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/AudioFilter",
+              "default": "any"
+            }
+          },
+          {
+            "in": "query",
+            "name": "article",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ArticleFilter",
               "default": "any"
             }
           },

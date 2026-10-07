@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     audio_path    TEXT,
     error_msg     TEXT,
     progress_done INTEGER,
-    progress_total INTEGER
+    progress_total INTEGER,
+    duration_seconds REAL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_bookmark ON jobs(bookmark_id, status);
@@ -87,6 +88,7 @@ _MIGRATIONS = {
     "attempts": "ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
     "progress_done": "ALTER TABLE jobs ADD COLUMN progress_done INTEGER",
     "progress_total": "ALTER TABLE jobs ADD COLUMN progress_total INTEGER",
+    "duration_seconds": "ALTER TABLE jobs ADD COLUMN duration_seconds REAL",
 }
 # The same for the bookmarks table. A bookmark synced before `finished` existed
 # has to be read again to learn whether it is archived or read, so adding the
@@ -239,7 +241,9 @@ async def list_jobs(
             return [dict(r) for r in rows], total
 
 
-_UPDATABLE_COLUMNS = frozenset({"status", "audio_path", "error_msg", "attempts"})
+_UPDATABLE_COLUMNS = frozenset(
+    {"status", "audio_path", "error_msg", "attempts", "duration_seconds"}
+)
 
 # Jobs the Jobs page shows. A completed job is the bookmark's audio, which the
 # Bookmarks page shows instead.
@@ -305,6 +309,16 @@ async def list_job_ids(statuses: tuple[str, ...] | None = None) -> list[str]:
         async with db.execute(f"SELECT id FROM jobs {where} {_ORDER_BY}", params) as cur:
             rows = await cur.fetchall()
             return [row[0] for row in rows]
+
+
+async def audio_missing_duration() -> list[tuple[str, str]]:
+    """(job id, audio filename) of finished audio whose length was never recorded."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT id, audio_path FROM jobs WHERE status = 'completed' "
+            "AND audio_path IS NOT NULL AND audio_path != '' AND duration_seconds IS NULL"
+        ) as cur:
+            return [(row[0], row[1]) for row in await cur.fetchall()]
 
 
 async def list_audio_paths() -> set[str]:
@@ -648,6 +662,7 @@ async def query_bookmarks(
     published_from: str | None = None,
     published_to: str | None = None,
     has_audio: bool | None = None,
+    has_article: bool | None = None,
     excluded: bool | None = None,
     limit: int = 30,
     offset: int = 0,
@@ -680,6 +695,9 @@ async def query_bookmarks(
         params.append(published_to)
     if has_audio is not None:
         where.append(_HAS_AUDIO if has_audio else f"NOT {_HAS_AUDIO}")
+    if has_article is not None:
+        where.append("b.has_article = ?")
+        params.append(1 if has_article else 0)
     if excluded is not None:
         where.append(_IS_EXCLUDED if excluded else f"NOT {_IS_EXCLUDED}")
     clause = " AND ".join(where)

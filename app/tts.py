@@ -193,6 +193,19 @@ _STRIKETHROUGH = re.compile(r"~~(\S(?:[^~\n]*?\S)?)~~")
 _SENTENCE_END = ".!?:;,…\"')]"
 
 
+def _end_sentence(text: str) -> str:
+    """Close a block of text with a stop unless it already ends one.
+
+    Engines treat punctuation as the end of a sentence. A block that has none
+    runs on into whatever follows, and when it is the last line of an article,
+    the final words are the ones most likely to be clipped.
+    """
+    text = text.rstrip()
+    if text and re.search(r"\w", text) and not text.endswith(tuple(_SENTENCE_END)):
+        return text + "."
+    return text
+
+
 def _table_row_to_sentence(line: str) -> str:
     """Render a table row as prose — spoken pipes are unlistenable."""
     cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -228,7 +241,10 @@ def _clean_block_markup(text: str) -> str:
             out.append(title)
             continue
 
-        out.append(_LIST_MARKER.sub("", line).rstrip())
+        item = _LIST_MARKER.sub("", line).rstrip()
+        # A list item is spoken as a sentence of its own; without a stop it
+        # runs into the next one.
+        out.append(_end_sentence(item) if item != line.rstrip() else item)
     return "\n".join(out)
 
 
@@ -289,7 +305,7 @@ def _clean_markdown(text: str) -> str:
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"[ \t]+(\n)", r"\1", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    return "\n\n".join(_end_sentence(block) for block in text.strip().split("\n\n"))
 
 
 # ── Chunking ───────────────────────────────────────────────────────────────────
@@ -731,6 +747,17 @@ def _tag_mp3(path: Path, title: str, url: str, engine: str) -> None:
         tags.save(str(path), v2_version=3)
     except Exception as exc:  # tagging is cosmetic — never fail a job over it
         logger.warning("Could not write ID3 tags to %s: %s", path.name, exc)
+
+
+def audio_duration(path: Path) -> float | None:
+    """The length of an MP3 in seconds, or None if it cannot be read."""
+    try:
+        from mutagen.mp3 import MP3
+
+        return round(float(MP3(str(path)).info.length), 1)
+    except Exception as exc:  # a missing length must never fail a job
+        logger.warning("Could not read the duration of %s: %s", path.name, exc)
+        return None
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────

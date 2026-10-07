@@ -165,12 +165,12 @@ class TestCleanMarkdown:
     def test_removes_bold_and_italic(self):
         result = _clean_markdown("**bold** and *italic* and ***both***")
         assert "*" not in result
-        assert result == "bold and italic and both"
+        assert result == "bold and italic and both."
 
     def test_removes_bold_underscore(self):
         result = _clean_markdown("__bold__ and _italic_")
         assert "__" not in result
-        assert result == "bold and italic"
+        assert result == "bold and italic."
 
     def test_preserves_snake_case_identifiers(self):
         """The old emphasis rule turned `send_user_file` into `senduserfile`."""
@@ -183,11 +183,11 @@ class TestCleanMarkdown:
 
     def test_strips_bullet_list_markers(self):
         result = _clean_markdown("* first item\n* second item\n- third item")
-        assert result == "first item\nsecond item\nthird item"
+        assert result == "first item.\nsecond item.\nthird item."
 
     def test_strips_numbered_list_markers(self):
         result = _clean_markdown("1. Step one\n2) Step two")
-        assert result == "Step one\nStep two"
+        assert result == "Step one.\nStep two."
 
     def test_strips_blockquote_markers(self):
         result = _clean_markdown("> A quoted remark.\n>> Nested one.")
@@ -212,10 +212,10 @@ class TestCleanMarkdown:
         assert "example.com" not in result
 
     def test_unescapes_html_entities(self):
-        assert _clean_markdown("Tom &amp; Jerry &mdash; friends") == "Tom & Jerry — friends"
+        assert _clean_markdown("Tom &amp; Jerry &mdash; friends") == "Tom & Jerry — friends."
 
     def test_strips_stray_html_tags(self):
-        assert _clean_markdown("<p>Hello <em>there</em></p>") == "Hello there"
+        assert _clean_markdown("<p>Hello <em>there</em></p>") == "Hello there."
 
     def test_collapses_excess_blank_lines(self):
         result = _clean_markdown("A\n\n\n\nB")
@@ -767,3 +767,43 @@ class TestFrontMatter:
     def test_words_are_counted_without_header_title_or_markup(self):
         text = "---\ntitle: T\n---\n\n# T\n\nOne **two** [three](http://x) four.\n"
         assert tts.count_words(text) == 4
+
+
+class TestSentenceEnds:
+    def test_the_last_line_of_an_article_gets_a_stop(self):
+        assert tts._clean_markdown("First.\n\nPhotograph: Getty") == "First.\n\nPhotograph: Getty."
+
+    def test_text_that_already_ends_a_sentence_is_left_alone(self):
+        for text in ("Done.", "Really?", "Wow!", 'He said "yes"', "Note:", "Fine…"):
+            assert tts._clean_markdown(text) == text
+
+    def test_a_hard_wrapped_paragraph_only_ends_at_its_end(self):
+        assert tts._clean_markdown("a sentence that\ncontinues here") == (
+            "a sentence that\ncontinues here."
+        )
+
+    def test_nothing_is_added_where_there_is_nothing_to_say(self):
+        assert tts._clean_markdown("~ $") == "~ $"
+
+    def test_list_items_are_sentences_of_their_own(self):
+        assert tts._clean_markdown("- one\n- two.\n- three") == "one.\ntwo.\nthree."
+
+    def test_pieces_no_longer_merge_into_one_unpunctuated_run(self):
+        text = "\n\n".join(["Item without a stop"] * 300)
+        for chunk in tts._split_text(tts._clean_markdown(text), 2000):
+            assert chunk.rstrip().endswith(".")
+
+
+def test_audio_duration_reads_an_mp3(tmp_path):
+    # Two seconds of silence from ffmpeg's lavfi source would need ffmpeg; build
+    # one MPEG-1 Layer III frame run by hand instead: 128 kbps, 44.1 kHz.
+    frame = bytes([0xFF, 0xFB, 0x90, 0x00]) + bytes(417 - 4)
+    path = tmp_path / "x.mp3"
+    path.write_bytes(frame * 77)  # 77 frames of 1152 samples at 44.1 kHz ≈ 2.0 s
+    assert tts.audio_duration(path) == pytest.approx(2.0, abs=0.1)
+
+
+def test_audio_duration_of_an_unreadable_file_is_none(tmp_path):
+    path = tmp_path / "x.mp3"
+    path.write_bytes(b"not audio")
+    assert tts.audio_duration(path) is None

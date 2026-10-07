@@ -8,9 +8,10 @@ Browse your Readeck library, select articles, queue them for audio generation, a
 
 - Paginated, searchable bookmark browser for your Readeck instance, showing each article's publish date and the date it was added to Readeck
 - A local copy of the Readeck library, synced on its own cron schedule, so filtering stays fast with thousands of bookmarks; bookmarks deleted, archived or marked read in Readeck are removed here too, audio included
-- Filters: has audio or not, excluded from auto generation or not, and optional start/end dates for when an article was published and when it was added to Readeck
+- Filters: has audio or not, has article text or not, excluded from auto generation or not, and optional start/end dates for when an article was published and when it was added to Readeck
 - Finished audio lives on its bookmark, with a player and a download link; bulk-delete audio or bulk-exclude bookmarks from auto generation
 - Readeck actions on a bookmark (its card menu, or the selection bar for several): open it in Readeck in a new tab, **mark read & archive** it, or **delete** it from Readeck — the last two also remove it, with its audio, from this app
+- The length of each audio file is recorded and shown on its bookmark (audio from before this was added is measured once at startup)
 - A **Generate audio** button on each bookmark without audio, greyed out when Readeck extracted no article text
 - Optional **auto audio generation** on a cron schedule (see below)
 - Background TTS job queue; the Jobs page shows what is queued, generating or failed, updated live
@@ -117,6 +118,8 @@ If a bookmark is deleted in Readeck while its audio is queued or generating, the
 ## Failed extractions
 
 When Readeck cannot extract an article (a paywall, say) it keeps the bookmark but reports no article, and its Markdown export holds little more than the title. Such a bookmark shows a **No article text** badge, cannot be generated until Readeck re-extracts it, and is skipped by auto generation (which picks it up on its own once text appears). As a backstop, a job whose text has fewer words than **Minimum article length** under Settings (default 30; the metadata header and title do not count; 0 turns it off) fails with an error instead of producing an audio file.
+
+Before synthesis the text is tidied so every paragraph and list item ends with a full stop: an engine reads a run of text with no punctuation as one long sentence, and the final words of an article are the ones most likely to be clipped.
 
 ## Auto audio generation
 

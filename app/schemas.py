@@ -108,6 +108,8 @@ class Audio(ApiModel):
     tts_engine: str
     voice: str
     generated_at: datetime
+    # Length of the finished file; None until it has been measured.
+    duration_seconds: float | None
 
     @classmethod
     def from_row(cls, row: dict) -> "Audio":
@@ -118,6 +120,7 @@ class Audio(ApiModel):
             tts_engine=row["tts_engine"] or "",
             voice=row["voice"] or "",
             generated_at=_utc(row["updated_at"] or row["created_at"]),
+            duration_seconds=row.get("duration_seconds"),
         )
 
 

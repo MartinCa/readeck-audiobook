@@ -62,6 +62,7 @@ async def _process_job(job: dict):
             job_id,
             status=models.JobStatus.completed,
             audio_path=audio_path.name,
+            duration_seconds=await asyncio.to_thread(tts.audio_duration, audio_path),
             error_msg=None,
         )
         if not await models.get_job(job_id):
@@ -125,6 +126,17 @@ async def apply_readeck_action(
     done = [bid for bid, ok in zip(ids, outcomes, strict=True) if ok]
     await forget_bookmarks(done, keep_rows=keep_rows)
     return len(done), len(ids) - len(done)
+
+
+async def backfill_durations() -> int:
+    """Measure audio generated before lengths were recorded; returns how many."""
+    measured = 0
+    for job_id, filename in await models.audio_missing_duration():
+        seconds = await asyncio.to_thread(tts.audio_duration, tts.AUDIO_DIR / Path(filename).name)
+        if seconds is not None:
+            await models.update_job(job_id, duration_seconds=seconds)
+            measured += 1
+    return measured
 
 
 def remove_audio_files(job_rows: list[dict]) -> None:

@@ -73,6 +73,10 @@ async def lifespan(app: FastAPI):
     if orphans:
         logger.info("Removed %d orphaned audio file(s)", orphans)
 
+    measured = await jobs.backfill_durations()
+    if measured:
+        logger.info("Measured the length of %d existing audio file(s)", measured)
+
     jobs.start_worker()
     # Catch up with whatever changed in Readeck while the app was down.
     sync.start_background()
@@ -191,6 +195,7 @@ async def list_bookmarks(
     page: int = Query(1, ge=1),
     search: str = "",
     audio: bookmarks.AudioFilter = bookmarks.AudioFilter.any,
+    article: bookmarks.ArticleFilter = bookmarks.ArticleFilter.any,
     auto_generation: bookmarks.ExclusionFilter = Query(
         bookmarks.ExclusionFilter.any, alias="autoGeneration"
     ),
@@ -206,6 +211,7 @@ async def list_bookmarks(
         published_from=published_from,
         published_to=published_to,
         audio=audio,
+        article=article,
         exclusion=auto_generation,
     )
     data = await bookmarks.list_bookmarks(filters, page, BOOKMARKS_PER_PAGE)

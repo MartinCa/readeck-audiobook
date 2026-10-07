@@ -331,6 +331,34 @@ class TestQueueBookmarks:
         assert len(await models.list_job_ids()) == 1
 
 
+class TestDuration:
+    async def test_a_completed_job_records_how_long_the_audio_is(self, monkeypatch, audio_dir):
+        await _queue()
+        claimed = await models.claim_next_pending_job(2)
+        monkeypatch.setattr(jobs.readeck, "get_article_text", _returns("Some words."))
+        monkeypatch.setattr(jobs.tts, "generate_audio", _writes(audio_dir / "new.mp3"))
+        monkeypatch.setattr(jobs.tts, "audio_duration", lambda path: 754.3)
+        await jobs._process_job(claimed)
+        assert (await models.get_job(claimed["id"]))["duration_seconds"] == 754.3
+
+    async def test_backfill_measures_audio_that_has_no_length_yet(self, monkeypatch, audio_dir):
+        job = await _queue()
+        await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="old.mp3")
+        pending = await _queue(bookmark_id="bm2")
+        monkeypatch.setattr(jobs.tts, "audio_duration", lambda path: 60.0)
+        assert await jobs.backfill_durations() == 1
+        assert (await models.get_job(job["id"]))["duration_seconds"] == 60.0
+        assert (await models.get_job(pending["id"]))["duration_seconds"] is None
+        assert await jobs.backfill_durations() == 0
+
+    async def test_backfill_skips_audio_it_cannot_read(self, monkeypatch, audio_dir):
+        job = await _queue()
+        await models.update_job(job["id"], status=models.JobStatus.completed, audio_path="gone.mp3")
+        monkeypatch.setattr(jobs.tts, "audio_duration", lambda path: None)
+        assert await jobs.backfill_durations() == 0
+        assert (await models.get_job(job["id"]))["duration_seconds"] is None
+
+
 class TestArticleLength:
     async def test_a_failed_extraction_fails_the_job_without_audio(self, monkeypatch, audio_dir):
         monkeypatch.setattr(jobs, "DEFAULT_MIN_ARTICLE_WORDS", 30)
