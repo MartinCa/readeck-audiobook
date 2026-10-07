@@ -621,6 +621,36 @@ def release_kokoro() -> bool:
     return True
 
 
+# Silence added after the last word. Some players (VLC, for one) end a variable
+# bitrate MP3 slightly before its true end, which cut the last word of an
+# article off; with silence behind the speech, what is lost is only silence.
+# Written into the encode, not appended afterwards, so the header's length
+# still matches the file.
+END_SILENCE_SECONDS = 2
+
+
+def _kokoro_ffmpeg_command(wav_path: Path, output_path: Path) -> list[str]:
+    """The ffmpeg call that turns Kokoro's WAV into the finished MP3."""
+    return [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(wav_path),
+        "-af",
+        f"apad=pad_dur={END_SILENCE_SECONDS}",
+        "-codec:a",
+        "libmp3lame",
+        "-qscale:a",
+        "2",
+        # generate_audio synthesizes to a "<name>.mp3.part" sibling
+        # and renames it into place, and ffmpeg picks its muxer from
+        # the extension — ".part" means nothing to it. State it.
+        "-f",
+        "mp3",
+        str(output_path),
+    ]
+
+
 async def synthesize_kokoro(
     text: str, output_path: Path, voice: str = "", on_progress: ProgressCallback | None = None
 ):
@@ -698,23 +728,9 @@ async def synthesize_kokoro(
                     if writer is not None:
                         writer.close()
 
-                ffmpeg_cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    str(wav_path),
-                    "-codec:a",
-                    "libmp3lame",
-                    "-qscale:a",
-                    "2",
-                    # generate_audio synthesizes to a "<name>.mp3.part" sibling
-                    # and renames it into place, and ffmpeg picks its muxer from
-                    # the extension — ".part" means nothing to it. State it.
-                    "-f",
-                    "mp3",
-                    str(output_path),
-                ]
-                result = subprocess.run(ffmpeg_cmd, capture_output=True)
+                result = subprocess.run(
+                    _kokoro_ffmpeg_command(wav_path, output_path), capture_output=True
+                )
                 if result.returncode != 0:
                     stderr = result.stderr.decode(errors="replace")
                     raise RuntimeError(

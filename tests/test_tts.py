@@ -358,6 +358,36 @@ class TestSynthesizeKokoro:
         assert total > 1
         assert sorted(seen) == [(n, total) for n in range(total + 1)]
 
+    async def test_the_mp3_ends_in_silence_after_the_last_word(self, audio_dir, fake_sherpa):
+        await tts.generate_audio(
+            "abcdef12-3456-7890-abcd-ef1234567890",
+            "Hello world",
+            title="An Article",
+            engine="kokoro",
+            voice="af_heart",
+        )
+        cmd = fake_sherpa["ffmpeg"]
+        assert cmd[cmd.index("-af") + 1] == f"apad=pad_dur={tts.END_SILENCE_SECONDS}"
+        # The pad is a filter on the input, before the encoder, so it is counted
+        # in the file's own length header.
+        assert cmd.index("-af") < cmd.index("-codec:a")
+
+    def test_the_real_ffmpeg_command_adds_the_silence(self, tmp_path):
+        import shutil
+        import wave
+
+        if not shutil.which("ffmpeg"):
+            pytest.skip("ffmpeg is not installed")
+        wav = tmp_path / "in.wav"
+        with wave.open(str(wav), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(24000)
+            w.writeframes(b"\x10\x10" * 24000 * 3)  # 3 s of a constant tone
+        out = tmp_path / "out.mp3"
+        subprocess.run(tts._kokoro_ffmpeg_command(wav, out), check=True, capture_output=True)
+        assert tts.audio_duration(out) == pytest.approx(3 + tts.END_SILENCE_SECONDS, abs=0.2)
+
     async def test_ffmpeg_is_told_the_format_for_the_part_file(self, audio_dir, fake_sherpa):
         """generate_audio synthesizes to '<name>.mp3.part' and renames it into place.
         ffmpeg picks its muxer from the extension and ".part" means nothing to it, so

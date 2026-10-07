@@ -119,6 +119,8 @@ If a bookmark is deleted in Readeck while its audio is queued or generating, the
 
 When Readeck cannot extract an article (a paywall, say) it keeps the bookmark but reports no article, and its Markdown export holds little more than the title. Such a bookmark shows a **No article text** badge, cannot be generated until Readeck re-extracts it, and is skipped by auto generation (which picks it up on its own once text appears). As a backstop, a job whose text has fewer words than **Minimum article length** under Settings (default 30; the metadata header and title do not count; 0 turns it off) fails with an error instead of producing an audio file.
 
+Kokoro audio ends with two seconds of silence after the last word. Some players, VLC for one, stop a variable-bitrate MP3 slightly before its real end, which clipped the last word of an article; the silence means any such loss is only silence. (edge-tts files are unchanged.)
+
 Before synthesis the text is tidied so every paragraph and list item ends with a full stop: an engine reads a run of text with no punctuation as one long sentence, and the final words of an article are the ones most likely to be clipped.
 
 ## Auto audio generation
