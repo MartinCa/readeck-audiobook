@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app import config, models, readeck
+from app import config, models, readeck, tts
 
 
 async def _completed(bookmark_id: str, audio_path: str, title: str = "T") -> dict:
@@ -764,3 +764,37 @@ async def test_auth_rejects_wrong_credentials(client, with_auth):
 
 async def test_health_stays_open_for_container_healthchecks(client, with_auth):
     assert (await client.get("/health")).status_code == 200
+
+
+async def test_tts_settings_default_to_the_environment_and_can_be_changed(client, monkeypatch):
+    monkeypatch.setattr(tts, "kokoro_available", lambda: True)
+    body = (await client.get("/api/settings")).json()["tts"]
+    assert body["engine"] == "edge-tts"
+    assert "kokoro" in body["engines"]
+    assert "af_heart" in body["kokoroVoices"]
+    choice = {"engine": "kokoro", "kokoroVoice": "bf_emma", "edgeVoice": "en-GB-SoniaNeural"}
+    resp = await client.put("/api/settings", json={"tts": choice})
+    assert resp.status_code == 200
+    saved = (await client.get("/api/settings")).json()["tts"]
+    assert {k: saved[k] for k in choice} == choice
+
+
+async def test_tts_settings_reject_an_unavailable_engine_or_unknown_voice(client, monkeypatch):
+    monkeypatch.setattr(tts, "kokoro_available", lambda: False)
+    resp = await client.put(
+        "/api/settings",
+        json={"tts": {"engine": "kokoro", "kokoroVoice": "nope", "edgeVoice": "en-US-AriaNeural"}},
+    )
+    assert resp.status_code == 422
+    assert set(resp.json()["errors"]) == {"tts.engine", "tts.kokoroVoice"}
+
+
+async def test_queued_jobs_use_the_chosen_engine_and_voice(client, monkeypatch):
+    from app import jobs
+
+    monkeypatch.setattr(tts, "kokoro_available", lambda: True)
+    await jobs.save_tts_settings(jobs.TtsSettings("kokoro", "am_michael", "en-US-GuyNeural"))
+    chosen = await jobs.load_tts_settings()
+    assert tts.resolve_engine_and_voice(
+        "en", chosen.engine, chosen.kokoro_voice, chosen.edge_voice
+    ) == ("kokoro", "am_michael")

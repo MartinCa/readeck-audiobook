@@ -66,9 +66,9 @@ All settings are passed as environment variables (or via `.env`).
 |---|---|---|---|
 | `READECK_BASE_URL` | Yes | — | Readeck instance URL, e.g. `https://readeck.example.com` |
 | `READECK_API_TOKEN` | Yes | — | Readeck Bearer API token |
-| `TTS_ENGINE` | No | `edge-tts` | `edge-tts` or `kokoro` |
+| `TTS_ENGINE` | No | `edge-tts` | Default engine, `edge-tts` or `kokoro`; changeable under Settings → Voice |
 | `EDGE_TTS_VOICE` | No | `en-US-AriaNeural` | Default voice when language cannot be detected |
-| `KOKORO_VOICE` | No | `af_heart` | Kokoro voice name, only used when `TTS_ENGINE=kokoro` |
+| `KOKORO_VOICE` | No | `af_heart` | Default Kokoro voice; changeable under Settings → Voice |
 | `KOKORO_IDLE_UNLOAD_SECONDS` | No | `300` | Unload the Kokoro model after this long without a job; `0` keeps it loaded |
 | `MAX_CONCURRENT_JOBS` | No | `2` | Maximum simultaneous TTS jobs |
 | `DATA_DIR` | No | `/app/data` | Where the SQLite database lives |

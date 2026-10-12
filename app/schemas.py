@@ -263,10 +263,26 @@ class GenerationSettings(ApiModel):
     min_article_words: int = Field(ge=0, le=10000)
 
 
+class TtsSettings(ApiModel):
+    engine: str
+    # Used for English articles; other languages keep their per-language voice.
+    kokoro_voice: str
+    edge_voice: str
+
+
+class TtsStatus(TtsSettings):
+    """The choice plus what this image offers to choose from."""
+
+    engines: list[str]
+    kokoro_voices: list[str]
+    edge_voices: list[str]
+
+
 class Settings(ApiModel):
     sync: SyncStatus
     auto_generation: AutoGenerationStatus
     generation: GenerationSettings
+    tts: TtsStatus
 
 
 class SettingsUpdate(ApiModel):
@@ -275,6 +291,7 @@ class SettingsUpdate(ApiModel):
     sync: SyncSettings | None = None
     auto_generation: AutoGenerationSettings | None = None
     generation: GenerationSettings | None = None
+    tts: TtsSettings | None = None
 
 
 class Health(ApiModel):

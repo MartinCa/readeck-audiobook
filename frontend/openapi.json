@@ -712,12 +712,16 @@
           },
           "sync": {
             "$ref": "#/components/schemas/SyncStatus"
+          },
+          "tts": {
+            "$ref": "#/components/schemas/TtsStatus"
           }
         },
         "required": [
           "sync",
           "autoGeneration",
-          "generation"
+          "generation",
+          "tts"
         ],
         "title": "Settings",
         "type": "object"
@@ -749,6 +753,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/SyncSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TtsSettings"
               },
               {
                 "type": "null"
@@ -846,6 +860,77 @@
           "removed"
         ],
         "title": "SyncStatus",
+        "type": "object"
+      },
+      "TtsSettings": {
+        "properties": {
+          "edgeVoice": {
+            "title": "Edgevoice",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "kokoroVoice": {
+            "title": "Kokorovoice",
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine",
+          "kokoroVoice",
+          "edgeVoice"
+        ],
+        "title": "TtsSettings",
+        "type": "object"
+      },
+      "TtsStatus": {
+        "description": "The choice plus what this image offers to choose from.",
+        "properties": {
+          "edgeVoice": {
+            "title": "Edgevoice",
+            "type": "string"
+          },
+          "edgeVoices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Edgevoices",
+            "type": "array"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "engines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Engines",
+            "type": "array"
+          },
+          "kokoroVoice": {
+            "title": "Kokorovoice",
+            "type": "string"
+          },
+          "kokoroVoices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Kokorovoices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "engine",
+          "kokoroVoice",
+          "edgeVoice",
+          "engines",
+          "kokoroVoices",
+          "edgeVoices"
+        ],
+        "title": "TtsStatus",
         "type": "object"
       },
       "ValidationError": {
