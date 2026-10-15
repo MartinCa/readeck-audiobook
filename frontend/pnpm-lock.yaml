@@ -192,7 +192,7 @@ importers:
         version: 0.4.0
       cronstrue:
         specifier: ^3.27.0
-        version: 3.31.0
+        version: 3.32.0
       date-fns:
         specifier: ^4.4.0
         version: 4.4.0
@@ -1277,8 +1277,8 @@ packages:
     resolution: {integrity: sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==}
     engines: {node: '>= 0.10'}
 
-  cronstrue@3.31.0:
-    resolution: {integrity: sha512-P+qVKwM6CHu6lWfQIq13DCBx95pxY/2zCQhIJvu5FsEsOlt9ZtuUI124V1LafoPsqHH09ruRsentTc4sbWxQHA==}
+  cronstrue@3.32.0:
+    resolution: {integrity: sha512-OHTec7+5nosN4UsitwgBDQ0bofGZF3H4pLqgqa93NR3nExNlhtVHcO2JY3jRognrFH8Bl9oAooT0hyCjSyOU+Q==}
     hasBin: true
 
   cross-spawn@7.0.6:
@@ -3886,7 +3886,7 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
-  cronstrue@3.31.0: {}
+  cronstrue@3.32.0: {}
 
   cross-spawn@7.0.6:
     dependencies:
