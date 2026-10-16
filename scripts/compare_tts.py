@@ -33,11 +33,13 @@ longer than 5 seconds). The weights download from Hugging Face on first use.
 """
 
 import argparse
+import array
 import asyncio
 import gc
 import html
 import io
 import json
+import math
 import subprocess
 import sys
 import time
@@ -156,7 +158,37 @@ def _http_json(url: str) -> dict:
         return json.load(resp)
 
 
-def run_voxtral(text: str, out: Path, url: str, voice: str, chunk_chars: int) -> dict:
+def _level(frames: bytes, target_db: float | None) -> tuple[bytes, float, float]:
+    """RMS and peak of 16-bit PCM in dBFS; optionally scaled so the RMS hits target_db.
+
+    The gain is capped so the peak stays below -0.5 dBFS rather than clipping.
+    """
+    samples = array.array("h")
+    samples.frombytes(frames)
+    if sys.byteorder == "big":
+        samples.byteswap()
+    if not samples:
+        return frames, -math.inf, -math.inf
+    rms = math.sqrt(sum(x * x for x in samples) / len(samples)) or 1e-9
+    peak = max(abs(x) for x in samples) or 1
+    rms_db, peak_db = 20 * math.log10(rms / 32768), 20 * math.log10(peak / 32768)
+    if target_db is not None:
+        gain = min(10 ** ((target_db - rms_db) / 20), 10 ** (-0.5 / 20) * 32768 / peak)
+        scaled = array.array("h", (max(-32768, min(32767, round(x * gain))) for x in samples))
+        if sys.byteorder == "big":
+            scaled.byteswap()
+        return scaled.tobytes(), rms_db, peak_db
+    return frames, rms_db, peak_db
+
+
+def run_voxtral(
+    text: str,
+    out: Path,
+    url: str,
+    voice: str,
+    chunk_chars: int,
+    level_db: float | None = None,
+) -> dict:
     """Synthesize through a vLLM-Omni server's OpenAI-style /v1/audio/speech route."""
     try:
         voices = _http_json(f"{url}/v1/audio/voices").get("voices", [])
@@ -200,7 +232,16 @@ def run_voxtral(text: str, out: Path, url: str, voice: str, chunk_chars: int) ->
                         * piece.getsampwidth()
                         * piece.getnchannels()
                     )
-                writer.writeframes(piece.readframes(piece.getnframes()))
+                frames = piece.readframes(piece.getnframes())
+                if piece.getsampwidth() == 2:
+                    frames, rms_db, peak_db = _level(frames, level_db)
+                    seconds = piece.getnframes() / piece.getframerate()
+                    print(
+                        f"      {seconds:5.1f}s  RMS {rms_db:6.1f} dBFS  peak {peak_db:6.1f} dBFS"
+                        + ("  (before leveling)" if level_db is not None else ""),
+                        flush=True,
+                    )
+                writer.writeframes(frames)
                 writer.writeframes(gap)
         if writer is None:
             raise RuntimeError("No readable text to synthesize")
@@ -268,6 +309,11 @@ def main() -> int:
         default=500,
         help="text per Voxtral request (default 500, the length the model card benchmarks)",
     )
+    parser.add_argument(
+        "--voxtral-level",
+        type=float,
+        help="scale every Voxtral chunk to this RMS in dBFS (e.g. -20) to even out volume drift",
+    )
     parser.add_argument("--ref-audio", help="reference clip for the Chatterbox engines")
     parser.add_argument(
         "--tempo",
@@ -333,9 +379,15 @@ def main() -> int:
             for voice in args.voxtral_voice or ["casual_female"]:
                 jobs.append(
                     (
-                        f"voxtral-{voice}",
+                        f"voxtral-{voice}"
+                        + (f"-lvl{args.voxtral_level:g}" if args.voxtral_level is not None else ""),
                         lambda out, v=voice: run_voxtral(
-                            text, out, args.voxtral_url.rstrip("/"), v, args.voxtral_chunk_chars
+                            text,
+                            out,
+                            args.voxtral_url.rstrip("/"),
+                            v,
+                            args.voxtral_chunk_chars,
+                            args.voxtral_level,
                         ),
                     )
                 )
