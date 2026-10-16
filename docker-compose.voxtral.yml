@@ -1,0 +1,75 @@
+# Compose file for the Voxtral TTS engine: the app plus a vLLM-Omni server that
+# holds the model on your NVIDIA GPU. The app uses the default image (no GPU
+# libraries of its own) and calls the server over the compose network.
+#
+# Usage:
+#   cp .env.example .env   # fill in READECK_BASE_URL / READECK_API_TOKEN
+#   docker compose -f docker-compose.voxtral.yml up -d
+#
+# The first start downloads the model (about 8 GB) into the hf_cache volume and
+# takes several minutes; the app waits for the server to report healthy. Needs
+# the NVIDIA Container Toolkit on the host and a GPU with 16 GB or more of memory.
+#
+# The Voxtral weights are licensed CC BY-NC 4.0: non-commercial use only.
+services:
+  readeck-audiobook:
+    image: ${READECK_AUDIOBOOK_IMAGE:-ghcr.io/martinca/readeck-audiobook:latest}
+    ports:
+      - "8080:8080"
+    environment:
+      READECK_BASE_URL: ${READECK_BASE_URL}
+      READECK_API_TOKEN: ${READECK_API_TOKEN}
+      TTS_ENGINE: voxtral
+      VOXTRAL_URL: http://voxtral:8091
+      VOXTRAL_VOICE: ${VOXTRAL_VOICE:-casual_female}
+      EDGE_TTS_VOICE: ${EDGE_TTS_VOICE:-en-US-AriaNeural}
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-2}
+      # Unauthenticated unless both are set — see README.
+      AUTH_USERNAME: ${AUTH_USERNAME:-}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
+      # Time zone the auto generation cron schedule is read in.
+      TZ: ${TZ:-UTC}
+    volumes:
+      - audio_data:/app/audio
+      - db_data:/app/data
+    depends_on:
+      voxtral:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  voxtral:
+    # The image has no entrypoint, so the command starts the server itself.
+    image: vllm/vllm-omni:v0.30.0
+    command: ["vllm", "serve", "mistralai/Voxtral-4B-TTS-2603", "--omni", "--port", "8091"]
+    ipc: host
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/v1/audio/voices', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # Covers the first start's model download and load.
+      start_period: 900s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  audio_data:
+  db_data:
+  hf_cache:

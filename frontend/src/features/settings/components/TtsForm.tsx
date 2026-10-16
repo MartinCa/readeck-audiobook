@@ -16,6 +16,16 @@ import type { TtsStatus } from "@/lib/types";
 const engineNames: Record<string, string> = {
   "edge-tts": "edge-tts (Microsoft online)",
   kokoro: "Kokoro (local)",
+  voxtral: "Voxtral (local server)",
+};
+
+// One line on what each engine is, shown under the choice.
+const engineNotes: Record<string, string> = {
+  "edge-tts":
+    "Microsoft's cloud voices over an unofficial endpoint: your article text is sent to Microsoft, and it can break without notice.",
+  kokoro: "Small model on your own machine. Fast, and nothing leaves the server.",
+  voxtral:
+    "Mistral's Voxtral on your own GPU, through a vLLM server. More natural, slower, and the weights are licensed for non-commercial use (CC BY-NC 4.0).",
 };
 
 const toItems = (values: string[], labels: Record<string, string> = {}) =>
@@ -59,12 +69,13 @@ export function TtsForm({ status }: { status: TtsStatus }) {
   const [engine, setEngine] = useState(status.engine);
   const [kokoroVoice, setKokoroVoice] = useState(status.kokoroVoice);
   const [edgeVoice, setEdgeVoice] = useState(status.edgeVoice);
+  const [voxtralVoice, setVoxtralVoice] = useState(status.voxtralVoice);
   const engineItems = toItems(status.engines, engineNames);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     save.mutate(
-      { tts: { engine, kokoroVoice, edgeVoice } },
+      { tts: { engine, kokoroVoice, edgeVoice, voxtralVoice } },
       {
         onSuccess: () => notifications.success("Settings saved"),
         onError: (error) =>
@@ -99,9 +110,13 @@ export function TtsForm({ status }: { status: TtsStatus }) {
                 ))}
               </SelectContent>
             </Select>
-            {status.engines.length < 2 && (
+            {engineNotes[engine] && (
+              <p className="text-muted-foreground text-xs">{engineNotes[engine]}</p>
+            )}
+            {status.engines.length < 3 && (
               <p className="text-muted-foreground text-xs">
-                Kokoro is not installed in this image. Use the Kokoro image to enable it.
+                Only the engines this deployment provides are listed: Kokoro needs the Kokoro image,
+                and Voxtral needs a server (set VOXTRAL_URL).
               </p>
             )}
           </div>
@@ -112,6 +127,14 @@ export function TtsForm({ status }: { status: TtsStatus }) {
               value={kokoroVoice}
               values={status.kokoroVoices}
               onChange={setKokoroVoice}
+            />
+          ) : engine === "voxtral" ? (
+            <VoiceSelect
+              id="voxtral-voice"
+              label="Voxtral voice"
+              value={voxtralVoice}
+              values={status.voxtralVoices}
+              onChange={setVoxtralVoice}
             />
           ) : (
             <VoiceSelect

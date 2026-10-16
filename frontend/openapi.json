@@ -875,12 +875,17 @@
           "kokoroVoice": {
             "title": "Kokorovoice",
             "type": "string"
+          },
+          "voxtralVoice": {
+            "title": "Voxtralvoice",
+            "type": "string"
           }
         },
         "required": [
           "engine",
           "kokoroVoice",
-          "edgeVoice"
+          "edgeVoice",
+          "voxtralVoice"
         ],
         "title": "TtsSettings",
         "type": "object"
@@ -920,15 +925,28 @@
             },
             "title": "Kokorovoices",
             "type": "array"
+          },
+          "voxtralVoice": {
+            "title": "Voxtralvoice",
+            "type": "string"
+          },
+          "voxtralVoices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Voxtralvoices",
+            "type": "array"
           }
         },
         "required": [
           "engine",
           "kokoroVoice",
           "edgeVoice",
+          "voxtralVoice",
           "engines",
           "kokoroVoices",
-          "edgeVoices"
+          "edgeVoices",
+          "voxtralVoices"
         ],
         "title": "TtsStatus",
         "type": "object"

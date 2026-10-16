@@ -768,33 +768,59 @@ async def test_health_stays_open_for_container_healthchecks(client, with_auth):
 
 async def test_tts_settings_default_to_the_environment_and_can_be_changed(client, monkeypatch):
     monkeypatch.setattr(tts, "kokoro_available", lambda: True)
+    monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
     body = (await client.get("/api/settings")).json()["tts"]
     assert body["engine"] == "edge-tts"
-    assert "kokoro" in body["engines"]
+    assert body["engines"] == ["edge-tts", "kokoro", "voxtral"]
     assert "af_heart" in body["kokoroVoices"]
-    choice = {"engine": "kokoro", "kokoroVoice": "bf_emma", "edgeVoice": "en-GB-SoniaNeural"}
+    assert "casual_female" in body["voxtralVoices"]
+    assert body["voxtralVoice"] == "casual_female"
+    choice = {
+        "engine": "voxtral",
+        "kokoroVoice": "bf_emma",
+        "edgeVoice": "en-GB-SoniaNeural",
+        "voxtralVoice": "neutral_male",
+    }
     resp = await client.put("/api/settings", json={"tts": choice})
     assert resp.status_code == 200
     saved = (await client.get("/api/settings")).json()["tts"]
     assert {k: saved[k] for k in choice} == choice
 
 
+async def test_tts_settings_only_offer_voxtral_when_a_server_is_configured(client, monkeypatch):
+    monkeypatch.setattr(tts.config, "VOXTRAL_URL", "")
+    assert "voxtral" not in (await client.get("/api/settings")).json()["tts"]["engines"]
+
+
 async def test_tts_settings_reject_an_unavailable_engine_or_unknown_voice(client, monkeypatch):
     monkeypatch.setattr(tts, "kokoro_available", lambda: False)
     resp = await client.put(
         "/api/settings",
-        json={"tts": {"engine": "kokoro", "kokoroVoice": "nope", "edgeVoice": "en-US-AriaNeural"}},
+        json={
+            "tts": {
+                "engine": "kokoro",
+                "kokoroVoice": "nope",
+                "edgeVoice": "en-US-AriaNeural",
+                "voxtralVoice": "de_female",
+            }
+        },
     )
     assert resp.status_code == 422
-    assert set(resp.json()["errors"]) == {"tts.engine", "tts.kokoroVoice"}
+    assert set(resp.json()["errors"]) == {"tts.engine", "tts.kokoroVoice", "tts.voxtralVoice"}
 
 
-async def test_queued_jobs_use_the_chosen_engine_and_voice(client, monkeypatch):
-    from app import jobs
-
-    monkeypatch.setattr(tts, "kokoro_available", lambda: True)
-    await jobs.save_tts_settings(jobs.TtsSettings("kokoro", "am_michael", "en-US-GuyNeural"))
-    chosen = await jobs.load_tts_settings()
-    assert tts.resolve_engine_and_voice(
-        "en", chosen.engine, chosen.kokoro_voice, chosen.edge_voice
-    ) == ("kokoro", "am_michael")
+async def test_voxtral_cannot_be_chosen_without_a_server(client, monkeypatch):
+    monkeypatch.setattr(tts.config, "VOXTRAL_URL", "")
+    resp = await client.put(
+        "/api/settings",
+        json={
+            "tts": {
+                "engine": "voxtral",
+                "kokoroVoice": "af_heart",
+                "edgeVoice": "en-US-AriaNeural",
+                "voxtralVoice": "casual_female",
+            }
+        },
+    )
+    assert resp.status_code == 422
+    assert set(resp.json()["errors"]) == {"tts.engine"}

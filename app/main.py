@@ -365,9 +365,11 @@ async def _settings_response() -> Settings:
             engine=chosen.engine,
             kokoro_voice=chosen.kokoro_voice,
             edge_voice=chosen.edge_voice,
+            voxtral_voice=chosen.voxtral_voice,
             engines=tts.available_engines(),
             kokoro_voices=tts.kokoro_english_voices(),
             edge_voices=list(tts.EDGE_ENGLISH_VOICES),
+            voxtral_voices=list(tts.VOXTRAL_ENGLISH_VOICES),
         ),
     )
 
@@ -394,6 +396,8 @@ async def update_settings(body: SettingsUpdate):
             errors["tts.kokoroVoice"] = ["Not a known English Kokoro voice"]
         if choice.edge_voice not in tts.EDGE_ENGLISH_VOICES:
             errors["tts.edgeVoice"] = ["Not an offered edge-tts voice"]
+        if choice.voxtral_voice not in tts.VOXTRAL_ENGLISH_VOICES:
+            errors["tts.voxtralVoice"] = ["Not an offered Voxtral voice"]
     if errors:
         return problem(422, "Validation failed", "Some settings are not valid.", errors)
     if sync_cron is not None:
@@ -406,7 +410,9 @@ async def update_settings(body: SettingsUpdate):
         await jobs.save_min_article_words(body.generation.min_article_words)
     if choice is not None:
         await jobs.save_tts_settings(
-            jobs.TtsSettings(choice.engine, choice.kokoro_voice, choice.edge_voice)
+            jobs.TtsSettings(
+                choice.engine, choice.kokoro_voice, choice.edge_voice, choice.voxtral_voice
+            )
         )
     return await _settings_response()
 

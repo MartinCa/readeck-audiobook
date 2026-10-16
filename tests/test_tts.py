@@ -53,6 +53,34 @@ class TestResolveEngineAndVoice:
         assert tts.resolve_engine_and_voice("da") == ("edge-tts", "da-DK-ChristelNeural")
 
 
+class TestResolveVoxtral:
+    def test_voxtral_for_english_when_a_server_is_configured(self, monkeypatch):
+        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
+        assert tts.resolve_engine_and_voice("en-US", "voxtral", voxtral_voice="casual_male") == (
+            "voxtral",
+            "casual_male",
+        )
+
+    def test_the_default_voice_comes_from_the_environment(self, monkeypatch):
+        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
+        monkeypatch.setattr(tts.config, "VOXTRAL_VOICE", "neutral_female")
+        assert tts.resolve_engine_and_voice("en", "voxtral") == ("voxtral", "neutral_female")
+
+    def test_other_languages_fall_back_to_edge_tts(self, monkeypatch):
+        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
+        assert tts.resolve_engine_and_voice("de", "voxtral") == ("edge-tts", "de-DE-KatjaNeural")
+
+    def test_without_a_server_it_falls_back_to_edge_tts(self, monkeypatch):
+        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "")
+        assert tts.resolve_engine_and_voice("en", "voxtral")[0] == "edge-tts"
+
+    def test_only_the_servers_english_presets_are_offered(self):
+        assert "casual_female" in tts.VOXTRAL_ENGLISH_VOICES
+        assert not any(
+            v.split("_")[0] in {"de", "fr", "es", "it"} for v in tts.VOXTRAL_ENGLISH_VOICES
+        )
+
+
 class TestResolveKokoroSid:
     """sherpa-onnx picks a speaker by integer id, so KOKORO_VOICE names are mapped."""
 
@@ -385,7 +413,7 @@ class TestSynthesizeKokoro:
             w.setframerate(24000)
             w.writeframes(b"\x10\x10" * 24000 * 3)  # 3 s of a constant tone
         out = tmp_path / "out.mp3"
-        subprocess.run(tts._kokoro_ffmpeg_command(wav, out), check=True, capture_output=True)
+        subprocess.run(tts._wav_to_mp3_command(wav, out), check=True, capture_output=True)
         assert tts.audio_duration(out) == pytest.approx(3 + tts.END_SILENCE_SECONDS, abs=0.2)
 
     async def test_ffmpeg_is_told_the_format_for_the_part_file(self, audio_dir, fake_sherpa):
@@ -592,10 +620,23 @@ class TestGenerateAudio:
             calls["kokoro"] = {"voice": voice, "text": text}
             output_path.write_bytes(b"kokoro-audio")
 
+        async def fake_voxtral(text, output_path, voice="", on_progress=None):
+            calls["voxtral"] = {"voice": voice, "text": text}
+            output_path.write_bytes(b"voxtral-audio")
+
         monkeypatch.setattr(tts, "synthesize_edge_tts", fake_edge)
         monkeypatch.setattr(tts, "synthesize_kokoro", fake_kokoro)
+        monkeypatch.setattr("app.voxtral.synthesize_voxtral", fake_voxtral)
         monkeypatch.setattr(tts, "_tag_mp3", lambda *a, **k: None)
         return calls
+
+    async def test_dispatches_voxtral_jobs(self, audio_dir, fake_backends):
+        path = await tts.generate_audio(
+            "job1", "Hello world", engine="voxtral", voice="casual_male"
+        )
+        assert fake_backends["voxtral"]["voice"] == "casual_male"
+        assert "edge" not in fake_backends and "kokoro" not in fake_backends
+        assert path.read_bytes() == b"voxtral-audio"
 
     async def test_uses_the_engine_recorded_on_the_job(self, audio_dir, fake_backends):
         await tts.generate_audio("job1", "Hello world", engine="kokoro", voice="af_heart")
