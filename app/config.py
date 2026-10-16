@@ -102,6 +102,21 @@ VOXTRAL_TIMEOUT_SECONDS = _env_int("VOXTRAL_TIMEOUT_SECONDS", 600)
 # a request. Each chunk's speech is brought to this level, in dBFS. "off"
 # disables the levelling.
 VOXTRAL_TARGET_DB = _env_float("VOXTRAL_TARGET_DB", -20.0)
+# The server holds the model in VRAM (about 14 GB) for as long as it runs. With
+# the server started with --enable-sleep-mode, the app puts it to sleep after
+# this many idle seconds and wakes it before the next job, which gives the
+# memory back to other GPU users in between. 0 leaves the server awake.
+VOXTRAL_IDLE_SLEEP_SECONDS = _env_int("VOXTRAL_IDLE_SLEEP_SECONDS", 0, minimum=0)
+# 1 moves the weights to host RAM (quick to wake); 2 discards them (frees more
+# and needs no host RAM, but the wake reloads from disk).
+VOXTRAL_SLEEP_LEVEL = min(2, _env_int("VOXTRAL_SLEEP_LEVEL", 1))
+# vLLM-Omni pipeline stages to put to sleep. Stage 0 is the language model,
+# which holds nearly all of the memory.
+VOXTRAL_SLEEP_STAGES = [
+    int(part)
+    for part in os.environ.get("VOXTRAL_SLEEP_STAGES", "0").split(",")
+    if part.strip().isdigit()
+] or [0]
 
 # Long articles are synthesised in pieces: edge-tts is a single WebSocket
 # session per call, and one multi-hour request is far more likely to fail than
