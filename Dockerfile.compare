@@ -1,0 +1,47 @@
+# Throwaway image for scripts/compare_tts.py: runs Kokoro (sherpa-onnx CUDA), edge-tts
+# and both Chatterbox models against one article in a single `docker run`, so
+# nothing is installed on the host. Not part of the app and not published.
+#
+#   docker build -f Dockerfile.compare -t tts-compare .
+#   docker run --rm --gpus all \
+#     -v "$PWD/article.md:/in/article.md:ro" \
+#     -v "$PWD/tts-compare:/out" \
+#     -v tts-compare-hf:/root/.cache/huggingface \
+#     tts-compare /in/article.md
+#
+# Two virtualenvs, because the Kokoro CUDA stack (onnxruntime plus NVIDIA pip
+# libs) and Chatterbox (PyTorch, tested upstream on Python 3.11) pin different
+# things. Kokoro uses the same Python as Dockerfile.kokoro, whose CUDA wheel is
+# known to install there.
+FROM docker.io/library/python:3.14-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg ca-certificates curl bzip2 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+WORKDIR /app
+
+# Kokoro + edge-tts. Only what scripts/compare_tts.py imports, not the web app.
+COPY requirements-kokoro-cuda.txt .
+RUN python -m venv /opt/kokoro && \
+    /opt/kokoro/bin/pip install --no-cache-dir -r requirements-kokoro-cuda.txt \
+        soundfile==0.14.0 mutagen==1.48.1 edge-tts==7.2.8
+
+# The model Dockerfile.kokoro bundles, so voice names match the app's table.
+RUN curl -fsSL -o /tmp/kokoro.tar.bz2 \
+      https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2 && \
+    mkdir -p /app/models/kokoro && \
+    tar -xjf /tmp/kokoro.tar.bz2 -C /app/models/kokoro --strip-components=1 && \
+    rm /tmp/kokoro.tar.bz2
+
+# Chatterbox + Chatterbox Turbo. The weights download on first run into the
+# Hugging Face cache, which the run command mounts as a volume.
+RUN uv venv --python 3.11 /opt/chatterbox && \
+    VIRTUAL_ENV=/opt/chatterbox uv pip install chatterbox-tts soundfile mutagen edge-tts
+
+COPY app/ ./app/
+COPY scripts/compare_tts.py scripts/compare_all.sh ./scripts/
+
+ENTRYPOINT ["/app/scripts/compare_all.sh"]
