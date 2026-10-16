@@ -35,6 +35,36 @@ async def save_min_article_words(words: int) -> None:
     await models.set_settings({"min_article_words": str(words)})
 
 
+@dataclass
+class TtsSettings:
+    engine: str
+    kokoro_voice: str
+    edge_voice: str
+    voxtral_voice: str
+
+
+async def load_tts_settings() -> TtsSettings:
+    """The engine and voices chosen in the UI; the environment supplies the defaults."""
+    raw = await models.get_settings()
+    return TtsSettings(
+        engine=raw.get("tts_engine") or config.TTS_ENGINE,
+        kokoro_voice=raw.get("kokoro_voice") or config.KOKORO_VOICE,
+        edge_voice=raw.get("edge_voice") or tts.LANG_VOICE_MAP["en"],
+        voxtral_voice=raw.get("voxtral_voice") or config.VOXTRAL_VOICE,
+    )
+
+
+async def save_tts_settings(current: TtsSettings) -> None:
+    await models.set_settings(
+        {
+            "tts_engine": current.engine,
+            "kokoro_voice": current.kokoro_voice,
+            "edge_voice": current.edge_voice,
+            "voxtral_voice": current.voxtral_voice,
+        }
+    )
+
+
 async def _process_job(job: dict):
     job_id = job["id"]
     # Job is already marked 'processing' by claim_next_pending_job
@@ -181,10 +211,13 @@ async def queue_bookmarks(bookmark_ids: list[str]) -> QueueOutcome:
     # A new attempt replaces an earlier failure rather than piling up beside it.
     await models.delete_failed_jobs(readable)
 
+    chosen = await load_tts_settings()
     for bid in readable:
         bm = bookmarks.get(bid, {})
         lang = bm.get("lang") or ""
-        engine, voice = tts.resolve_engine_and_voice(lang)
+        engine, voice = tts.resolve_engine_and_voice(
+            lang, chosen.engine, chosen.kokoro_voice, chosen.edge_voice, chosen.voxtral_voice
+        )
         # The check above is a cheap pre-filter; the insert re-checks
         # atomically in case another caller (say the auto generation
         # scheduler) queued the same bookmark in the meantime.

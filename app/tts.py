@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import gc
 import html
+import importlib.util
 import logging
 import os
 import re
@@ -68,26 +69,85 @@ KOKORO_LEXICONS = ("lexicon-us-en.txt", "lexicon-zh.txt")
 
 ENGINE_EDGE = "edge-tts"
 ENGINE_KOKORO = "kokoro"
+ENGINE_VOXTRAL = "voxtral"
+# Voxtral covers more languages, but only English is wired up here.
+VOXTRAL_SUPPORTED_LANGS = {"en"}
+# The server's English presets. Its other presets are language-prefixed
+# (de_female, fr_male, ...) and its list also holds "default", which is left out
+# because nothing says which language it speaks.
+VOXTRAL_ENGLISH_VOICES = (
+    "casual_female", "casual_male", "cheerful_female", "neutral_female", "neutral_male",
+)  # fmt: skip
 
 
-def _pick_voice(lang: str) -> str:
+# English edge-tts voices offered in the settings. Other languages keep the
+# per-language voice in LANG_VOICE_MAP.
+EDGE_ENGLISH_VOICES = (
+    "en-US-AriaNeural", "en-US-AvaNeural", "en-US-AndrewNeural", "en-US-BrianNeural",
+    "en-US-EmmaNeural", "en-US-GuyNeural", "en-US-JennyNeural", "en-GB-SoniaNeural",
+    "en-GB-RyanNeural", "en-AU-NatashaNeural",
+)  # fmt: skip
+
+
+def kokoro_english_voices() -> list[str]:
+    """Kokoro voices that read English: the American (a*) and British (b*) ones."""
+    return sorted(v for v in KOKORO_VOICES if v[0] in "ab")
+
+
+def kokoro_available() -> bool:
+    """Whether this image has sherpa-onnx and the bundled Kokoro model."""
+    return (
+        importlib.util.find_spec("sherpa_onnx") is not None
+        and (config.KOKORO_MODEL_DIR / "model.onnx").is_file()
+    )
+
+
+def voxtral_available() -> bool:
+    """Whether a Voxtral server is configured; the app does not probe it."""
+    return bool(config.VOXTRAL_URL)
+
+
+def available_engines() -> list[str]:
+    engines = [ENGINE_EDGE]
+    if kokoro_available():
+        engines.append(ENGINE_KOKORO)
+    if voxtral_available():
+        engines.append(ENGINE_VOXTRAL)
+    return engines
+
+
+def _pick_voice(lang: str, english_voice: str | None = None) -> str:
     if not lang:
         return DEFAULT_VOICE
     base = lang.split("-")[0].lower()
+    if base == "en" and english_voice:
+        return english_voice
     return LANG_VOICE_MAP.get(base, DEFAULT_VOICE)
 
 
-def resolve_engine_and_voice(lang: str) -> tuple[str, str]:
+def resolve_engine_and_voice(
+    lang: str,
+    engine: str | None = None,
+    kokoro_voice: str | None = None,
+    edge_voice: str | None = None,
+    voxtral_voice: str | None = None,
+) -> tuple[str, str]:
     """Decide which engine and voice a job in `lang` will actually use.
 
     Resolved once when the job is created and then stored on the row, so the
-    Jobs page reports the engine that really ran rather than whatever
-    TTS_ENGINE happens to be set to at display time.
+    Jobs page reports the engine that really ran rather than whatever the
+    settings say at display time. Anything not passed falls back to the
+    environment defaults.
     """
     base = (lang or "").split("-")[0].lower()
-    if config.TTS_ENGINE == ENGINE_KOKORO and base in KOKORO_SUPPORTED_LANGS:
-        return ENGINE_KOKORO, config.KOKORO_VOICE
-    return ENGINE_EDGE, _pick_voice(lang)
+    wanted = engine or config.TTS_ENGINE
+    if wanted == ENGINE_KOKORO and base in KOKORO_SUPPORTED_LANGS:
+        return ENGINE_KOKORO, kokoro_voice or config.KOKORO_VOICE
+    if wanted == ENGINE_VOXTRAL and base in VOXTRAL_SUPPORTED_LANGS:
+        if voxtral_available():
+            return ENGINE_VOXTRAL, voxtral_voice or config.VOXTRAL_VOICE
+        logger.warning("Voxtral is the chosen engine but VOXTRAL_URL is not set; using edge-tts")
+    return ENGINE_EDGE, _pick_voice(lang, edge_voice)
 
 
 def resolve_kokoro_sid(voice: str) -> int:
@@ -100,9 +160,8 @@ def resolve_kokoro_sid(voice: str) -> int:
     try:
         return KOKORO_VOICES[voice]
     except KeyError:
-        english = sorted(v for v in KOKORO_VOICES if v[0] in "ab")
         raise ValueError(
-            f"Unknown Kokoro voice {voice!r}. English voices: {', '.join(english)}"
+            f"Unknown Kokoro voice {voice!r}. English voices: {', '.join(kokoro_english_voices())}"
         ) from None
 
 
@@ -354,14 +413,23 @@ def _split_text(text: str, max_chars: int) -> list[str]:
     return merged
 
 
+class PermanentError(RuntimeError):
+    """A failure that trying again cannot fix, such as a request the server rejects."""
+
+
 async def _with_retries(factory, description: str):
-    """Run an async factory, retrying transient synthesis failures."""
+    """Run an async factory, retrying transient synthesis failures.
+
+    A `PermanentError` is not retried: it fails at once.
+    """
     last_error: Exception | None = None
     for attempt in range(1, config.TTS_MAX_RETRIES + 1):
         try:
             return await factory()
         except asyncio.CancelledError:
             raise
+        except PermanentError as exc:
+            raise RuntimeError(f"{description} failed: {exc}") from exc
         except Exception as exc:
             last_error = exc
             if attempt == config.TTS_MAX_RETRIES:
@@ -629,8 +697,8 @@ def release_kokoro() -> bool:
 END_SILENCE_SECONDS = 2
 
 
-def _kokoro_ffmpeg_command(wav_path: Path, output_path: Path) -> list[str]:
-    """The ffmpeg call that turns Kokoro's WAV into the finished MP3."""
+def _wav_to_mp3_command(wav_path: Path, output_path: Path) -> list[str]:
+    """The ffmpeg call that turns a synthesized WAV into the finished MP3."""
     return [
         "ffmpeg",
         "-y",
@@ -729,7 +797,7 @@ async def synthesize_kokoro(
                         writer.close()
 
                 result = subprocess.run(
-                    _kokoro_ffmpeg_command(wav_path, output_path), capture_output=True
+                    _wav_to_mp3_command(wav_path, output_path), capture_output=True
                 )
                 if result.returncode != 0:
                     stderr = result.stderr.decode(errors="replace")
@@ -809,6 +877,10 @@ async def generate_audio(
     try:
         if engine == ENGINE_KOKORO:
             await synthesize_kokoro(cleaned, partial_path, voice, on_progress)
+        elif engine == ENGINE_VOXTRAL:
+            from app import voxtral  # imports this module, so not at the top
+
+            await voxtral.synthesize_voxtral(cleaned, partial_path, voice, on_progress)
         else:
             await synthesize_edge_tts(cleaned, partial_path, voice, on_progress)
 

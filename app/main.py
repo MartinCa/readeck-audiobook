@@ -30,6 +30,7 @@ from app.schemas import (
     Settings,
     SettingsUpdate,
     SyncStatus,
+    TtsStatus,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -337,6 +338,7 @@ async def _settings_response() -> Settings:
     sync_state = await sync.load_state()
     current = await autogen.load_settings()
     state = await autogen.load_run_state()
+    chosen = await jobs.load_tts_settings()
     return Settings(
         sync=SyncStatus(
             cron=sync_cron,
@@ -359,6 +361,16 @@ async def _settings_response() -> Settings:
             last_error=state.last_error,
         ),
         generation=GenerationSettings(min_article_words=await jobs.load_min_article_words()),
+        tts=TtsStatus(
+            engine=chosen.engine,
+            kokoro_voice=chosen.kokoro_voice,
+            edge_voice=chosen.edge_voice,
+            voxtral_voice=chosen.voxtral_voice,
+            engines=tts.available_engines(),
+            kokoro_voices=tts.kokoro_english_voices(),
+            edge_voices=list(tts.EDGE_ENGLISH_VOICES),
+            voxtral_voices=list(tts.VOXTRAL_ENGLISH_VOICES),
+        ),
     )
 
 
@@ -376,10 +388,18 @@ async def update_settings(body: SettingsUpdate):
     for field, cron in (("sync.cron", sync_cron), ("autoGeneration.cron", auto_cron)):
         if cron is not None and not scheduler.valid_cron(cron):
             errors[field] = ["Not a valid cron expression, e.g. 0 * * * *"]
+    choice = body.tts
+    if choice is not None:
+        if choice.engine not in tts.available_engines():
+            errors["tts.engine"] = ["Not available in this image"]
+        if choice.kokoro_voice not in tts.kokoro_english_voices():
+            errors["tts.kokoroVoice"] = ["Not a known English Kokoro voice"]
+        if choice.edge_voice not in tts.EDGE_ENGLISH_VOICES:
+            errors["tts.edgeVoice"] = ["Not an offered edge-tts voice"]
+        if choice.voxtral_voice not in tts.VOXTRAL_ENGLISH_VOICES:
+            errors["tts.voxtralVoice"] = ["Not an offered Voxtral voice"]
     if errors:
-        return problem(
-            422, "Validation failed", "The schedule is not a valid cron expression.", errors
-        )
+        return problem(422, "Validation failed", "Some settings are not valid.", errors)
     if sync_cron is not None:
         await sync.save_cron(sync_cron)
     if auto is not None:
@@ -388,6 +408,12 @@ async def update_settings(body: SettingsUpdate):
         )
     if body.generation is not None:
         await jobs.save_min_article_words(body.generation.min_article_words)
+    if choice is not None:
+        await jobs.save_tts_settings(
+            jobs.TtsSettings(
+                choice.engine, choice.kokoro_voice, choice.edge_voice, choice.voxtral_voice
+            )
+        )
     return await _settings_response()
 
 

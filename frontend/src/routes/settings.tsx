@@ -4,6 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AutoGenerationForm } from "@/features/settings/components/AutoGenerationForm";
 import { GenerationForm } from "@/features/settings/components/GenerationForm";
 import { SyncForm } from "@/features/settings/components/SyncForm";
+import { TtsForm } from "@/features/settings/components/TtsForm";
 import { useSettings } from "@/features/settings/hooks";
 
 export const Route = createFileRoute("/settings")({ component: SettingsPage });
@@ -29,6 +30,7 @@ function SettingsPage() {
         <>
           <SyncForm status={settings.data.sync} />
           <AutoGenerationForm status={settings.data.autoGeneration} />
+          <TtsForm status={settings.data.tts} />
           <GenerationForm settings={settings.data.generation} />
         </>
       )}

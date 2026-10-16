@@ -6,12 +6,34 @@ Every tunable lives here so that paths are overridable for local development
 tests have a single place to patch.
 """
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _env_path(name: str, default: str) -> Path:
     return Path(os.environ.get(name) or default).expanduser()
+
+
+def _env_float(name: str, default: float | None) -> float | None:
+    """A float setting.
+
+    Unset or empty gives the default, "off" (or "none") gives None, and a value
+    that is not a number is reported and gives the default, so a typo cannot
+    quietly switch a feature off.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    if raw.strip().lower() in {"off", "none"}:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("%s=%r is not a number or 'off'; using %s", name, raw, default)
+        return default
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -61,6 +83,25 @@ KOKORO_IDLE_UNLOAD_SECONDS = _env_int("KOKORO_IDLE_UNLOAD_SECONDS", 300, minimum
 # default because it also dumps the full text of every article being synthesized
 # to the log, twice (once as hex).
 KOKORO_DEBUG = os.environ.get("KOKORO_DEBUG", "").lower() in {"1", "true", "yes"}
+
+# Voxtral runs as a separate vLLM-Omni server (see docker-compose.voxtral.yml);
+# the app only calls its HTTP API, so it needs no GPU libraries of its own.
+# Setting VOXTRAL_URL is what makes the engine available.
+VOXTRAL_URL = os.environ.get("VOXTRAL_URL", "").rstrip("/")
+VOXTRAL_MODEL = os.environ.get("VOXTRAL_MODEL", "mistralai/Voxtral-4B-TTS-2603")
+VOXTRAL_VOICE = os.environ.get("VOXTRAL_VOICE", "casual_female")
+# Each request is independent: the model carries no voice or intonation from
+# one to the next, so every chunk border is an audible reset. Fewer, longer
+# chunks mean fewer resets. Mistral's guidance is under 300 words (about 1800
+# characters) per request, and the model generates up to roughly two minutes.
+VOXTRAL_CHUNK_CHARS = _env_int("VOXTRAL_CHUNK_CHARS", 1800, minimum=200)
+# Caps the audio generated per request (the server's own default is 2048).
+VOXTRAL_MAX_NEW_TOKENS = _env_int("VOXTRAL_MAX_NEW_TOKENS", 4096)
+VOXTRAL_TIMEOUT_SECONDS = _env_int("VOXTRAL_TIMEOUT_SECONDS", 600)
+# Voxtral's raw output is quiet (around -37 dBFS RMS) and drifts a few dB within
+# a request. Each chunk's speech is brought to this level, in dBFS. "off"
+# disables the levelling.
+VOXTRAL_TARGET_DB = _env_float("VOXTRAL_TARGET_DB", -20.0)
 
 # Long articles are synthesised in pieces: edge-tts is a single WebSocket
 # session per call, and one multi-hour request is far more likely to fail than

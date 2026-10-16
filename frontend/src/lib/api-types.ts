@@ -522,6 +522,7 @@ export interface components {
       autoGeneration: components["schemas"]["AutoGenerationStatus"];
       generation: components["schemas"]["GenerationSettings"];
       sync: components["schemas"]["SyncStatus"];
+      tts: components["schemas"]["TtsStatus"];
     };
     /**
      * SettingsUpdate
@@ -531,6 +532,7 @@ export interface components {
       autoGeneration?: components["schemas"]["AutoGenerationSettings"] | null;
       generation?: components["schemas"]["GenerationSettings"] | null;
       sync?: components["schemas"]["SyncSettings"] | null;
+      tts?: components["schemas"]["TtsSettings"] | null;
     };
     /** SyncSettings */
     SyncSettings: {
@@ -557,6 +559,39 @@ export interface components {
       running: boolean;
       /** Updated */
       updated: number;
+    };
+    /** TtsSettings */
+    TtsSettings: {
+      /** Edgevoice */
+      edgeVoice: string;
+      /** Engine */
+      engine: string;
+      /** Kokorovoice */
+      kokoroVoice: string;
+      /** Voxtralvoice */
+      voxtralVoice: string;
+    };
+    /**
+     * TtsStatus
+     * @description The choice plus what this image offers to choose from.
+     */
+    TtsStatus: {
+      /** Edgevoice */
+      edgeVoice: string;
+      /** Edgevoices */
+      edgeVoices: string[];
+      /** Engine */
+      engine: string;
+      /** Engines */
+      engines: string[];
+      /** Kokorovoice */
+      kokoroVoice: string;
+      /** Kokorovoices */
+      kokoroVoices: string[];
+      /** Voxtralvoice */
+      voxtralVoice: string;
+      /** Voxtralvoices */
+      voxtralVoices: string[];
     };
     /** ValidationError */
     ValidationError: {
