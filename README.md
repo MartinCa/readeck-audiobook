@@ -77,6 +77,9 @@ All settings are passed as environment variables (or via `.env`).
 | `VOXTRAL_MAX_NEW_TOKENS` | No | `4096` | Cap on the audio generated per request (the server's own default is 2048) |
 | `VOXTRAL_TARGET_DB` | No | `-20` | Level each chunk of speech is brought to, in dBFS; `off` disables levelling. A value that is not a number is logged and the default kept |
 | `VOXTRAL_TIMEOUT_SECONDS` | No | `600` | How long to wait for one Voxtral request |
+| `VOXTRAL_IDLE_SLEEP_SECONDS` | No | `300` | Put the Voxtral server to sleep after this many idle seconds, freeing its GPU memory; `0` turns it off. Needs the server started with `--enable-sleep-mode`; see the Voxtral section |
+| `VOXTRAL_SLEEP_LEVEL` | No | `2` | `2` discards the weights (frees the most, reloads them from disk on wake); `1` moves them to host RAM (quicker wake) |
+| `VOXTRAL_SLEEP_STAGES` | No | `0,1` | Comma-separated vLLM-Omni stages to put to sleep (Voxtral has two: the language model and the audio decoder). If the server refuses them together, they are tried one at a time |
 | `MAX_CONCURRENT_JOBS` | No | `2` | Maximum simultaneous TTS jobs |
 | `DATA_DIR` | No | `/app/data` | Where the SQLite database lives |
 | `AUDIO_DIR` | No | `/app/audio` | Where generated MP3s are written |
@@ -123,6 +126,8 @@ docker compose -f docker-compose.voxtral.yml up -d
 `docker-compose.voxtral.yml` starts both containers, downloads the model on first start (about 8 GB, several minutes) and holds the app back until the server is healthy. It needs the NVIDIA Container Toolkit. To run the server yourself, set `VOXTRAL_URL` to its address and pick the engine under Settings → Voice. The engine is only offered when `VOXTRAL_URL` is set.
 
 **The licence is non-commercial.** The model's weights are released under CC BY-NC 4.0, so this engine is for personal use.
+
+**Giving the GPU back when idle.** The server keeps the model in VRAM (about 14 GB) for as long as it runs. This is on by default (`VOXTRAL_IDLE_SLEEP_SECONDS=300`) and needs the server started with `--enable-sleep-mode`, which `docker-compose.voxtral.yml` does; for a server without the flag, set the variable to `0`. Once no Voxtral job has run for that many seconds the app calls the server's `/v1/omni/sleep`, and `/v1/omni/wakeup` before the next one. A failed sleep or wake call is logged and never fails a job. Try it by hand first: `curl -X POST $VOXTRAL_URL/v1/omni/sleep -H 'Content-Type: application/json' -d '{"stage_ids":[0,1],"level":2}'`, check `nvidia-smi`, then the same with `/v1/omni/wakeup` and `{"stage_ids":[0,1]}`.
 
 **The server takes most of the GPU.** vLLM reserves a large share of video memory for itself (a community recipe measured about 20 GiB at startup on a 24 GB card), so it will not share the GPU with the Kokoro CUDA image.
 
