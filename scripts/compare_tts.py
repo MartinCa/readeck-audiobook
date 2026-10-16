@@ -67,7 +67,7 @@ def truncate(cleaned: str, max_chars: int) -> str:
 
 
 def encode_mp3(wav_path: Path, mp3_path: Path, tempo: float = 1.0) -> None:
-    # atempo changes the speed without changing the pitch.
+    # atempo changes the speed without changing pitch.
     slow = ["-af", f"atempo={tempo}"] if tempo != 1.0 else []
     result = subprocess.run(
         [
@@ -158,7 +158,14 @@ def _http_json(url: str) -> dict:
         return json.load(resp)
 
 
-def _level(frames: bytes, target_db: float | None) -> tuple[bytes, float, float]:
+def _rms_db(samples: array.array) -> float:
+    if not samples:
+        return -math.inf
+    rms = math.sqrt(sum(x * x for x in samples) / len(samples)) or 1e-9
+    return 20 * math.log10(rms / 32768)
+
+
+def _level(frames: bytes, target_db: float | None) -> tuple[bytes, float, float, float, float]:
     """RMS and peak of 16-bit PCM in dBFS; optionally scaled so the RMS hits target_db.
 
     The gain is capped so the peak stays below -0.5 dBFS rather than clipping.
@@ -168,17 +175,18 @@ def _level(frames: bytes, target_db: float | None) -> tuple[bytes, float, float]
     if sys.byteorder == "big":
         samples.byteswap()
     if not samples:
-        return frames, -math.inf, -math.inf
-    rms = math.sqrt(sum(x * x for x in samples) / len(samples)) or 1e-9
+        return frames, -math.inf, -math.inf, -math.inf, -math.inf
+    quarter = max(1, len(samples) // 4)
+    start_db, end_db = _rms_db(samples[:quarter]), _rms_db(samples[-quarter:])
     peak = max(abs(x) for x in samples) or 1
-    rms_db, peak_db = 20 * math.log10(rms / 32768), 20 * math.log10(peak / 32768)
+    rms_db, peak_db = _rms_db(samples), 20 * math.log10(peak / 32768)
     if target_db is not None:
         gain = min(10 ** ((target_db - rms_db) / 20), 10 ** (-0.5 / 20) * 32768 / peak)
         scaled = array.array("h", (max(-32768, min(32767, round(x * gain))) for x in samples))
         if sys.byteorder == "big":
             scaled.byteswap()
-        return scaled.tobytes(), rms_db, peak_db
-    return frames, rms_db, peak_db
+        return scaled.tobytes(), rms_db, peak_db, start_db, end_db
+    return frames, rms_db, peak_db, start_db, end_db
 
 
 def run_voxtral(
@@ -234,10 +242,11 @@ def run_voxtral(
                     )
                 frames = piece.readframes(piece.getnframes())
                 if piece.getsampwidth() == 2:
-                    frames, rms_db, peak_db = _level(frames, level_db)
+                    frames, rms_db, peak_db, start_db, end_db = _level(frames, level_db)
                     seconds = piece.getnframes() / piece.getframerate()
                     print(
-                        f"      {seconds:5.1f}s  RMS {rms_db:6.1f} dBFS  peak {peak_db:6.1f} dBFS"
+                        f"      {seconds:5.1f}s  RMS {rms_db:6.1f}  peak {peak_db:6.1f} dBFS"
+                        f"  first quarter {start_db:6.1f}  last quarter {end_db:6.1f} dBFS"
                         + ("  (before leveling)" if level_db is not None else ""),
                         flush=True,
                     )
