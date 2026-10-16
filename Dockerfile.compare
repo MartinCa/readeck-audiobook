@@ -27,7 +27,7 @@ WORKDIR /app
 COPY requirements-kokoro-cuda.txt .
 RUN python -m venv /opt/kokoro && \
     /opt/kokoro/bin/pip install --no-cache-dir -r requirements-kokoro-cuda.txt \
-        soundfile==0.14.0 mutagen==1.48.1 edge-tts==7.2.8
+        soundfile==0.14.0 mutagen==1.48.1 edge-tts==7.3.1
 
 # The model Dockerfile.kokoro bundles, so voice names match the app's table.
 RUN curl -fsSL -o /tmp/kokoro.tar.bz2 \
