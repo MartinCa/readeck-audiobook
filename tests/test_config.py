@@ -22,6 +22,26 @@ def _restore_config():
     importlib.reload(config)
 
 
+def test_a_float_setting_takes_a_number_or_off(monkeypatch):
+    assert _reload(monkeypatch, VOXTRAL_TARGET_DB="-18.5").VOXTRAL_TARGET_DB == -18.5
+    assert _reload(monkeypatch, VOXTRAL_TARGET_DB="0").VOXTRAL_TARGET_DB == 0.0
+    assert _reload(monkeypatch, VOXTRAL_TARGET_DB="off").VOXTRAL_TARGET_DB is None
+    assert _reload(monkeypatch, VOXTRAL_TARGET_DB=" OFF ").VOXTRAL_TARGET_DB is None
+
+
+def test_a_float_setting_that_is_unset_or_empty_uses_the_default(monkeypatch):
+    assert _reload(monkeypatch, VOXTRAL_TARGET_DB=None).VOXTRAL_TARGET_DB == -20.0
+    assert _reload(monkeypatch, VOXTRAL_TARGET_DB="  ").VOXTRAL_TARGET_DB == -20.0
+
+
+def test_a_mistyped_float_setting_warns_and_keeps_the_default(monkeypatch, caplog):
+    """A typo (the letter O for a zero) used to disable levelling without a sign."""
+    with caplog.at_level("WARNING", logger="app.config"):
+        cfg = _reload(monkeypatch, VOXTRAL_TARGET_DB="-2O")
+    assert cfg.VOXTRAL_TARGET_DB == -20.0
+    assert "VOXTRAL_TARGET_DB" in caplog.text and "-2O" in caplog.text
+
+
 def test_storage_paths_default_to_the_container_layout(monkeypatch):
     cfg = _reload(monkeypatch, DATA_DIR=None, AUDIO_DIR=None)
     assert str(cfg.DATA_DIR) == "/app/data"

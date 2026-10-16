@@ -28,6 +28,12 @@ const engineNotes: Record<string, string> = {
     "Mistral's Voxtral on your own GPU, through a vLLM server. More natural, slower, and the weights are licensed for non-commercial use (CC BY-NC 4.0).",
 };
 
+// What a deployment needs before an engine is offered. edge-tts is always there.
+const engineRequirements: Record<string, string> = {
+  kokoro: "Kokoro needs the Kokoro image",
+  voxtral: "Voxtral needs a server (set VOXTRAL_URL)",
+};
+
 const toItems = (values: string[], labels: Record<string, string> = {}) =>
   values.map((value) => ({ value, label: labels[value] ?? value }));
 
@@ -71,6 +77,7 @@ export function TtsForm({ status }: { status: TtsStatus }) {
   const [edgeVoice, setEdgeVoice] = useState(status.edgeVoice);
   const [voxtralVoice, setVoxtralVoice] = useState(status.voxtralVoice);
   const engineItems = toItems(status.engines, engineNames);
+  const unavailable = Object.keys(engineRequirements).filter((e) => !status.engines.includes(e));
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,10 +120,10 @@ export function TtsForm({ status }: { status: TtsStatus }) {
             {engineNotes[engine] && (
               <p className="text-muted-foreground text-xs">{engineNotes[engine]}</p>
             )}
-            {status.engines.length < 3 && (
+            {unavailable.length > 0 && (
               <p className="text-muted-foreground text-xs">
-                Only the engines this deployment provides are listed: Kokoro needs the Kokoro image,
-                and Voxtral needs a server (set VOXTRAL_URL).
+                Not available in this deployment:{" "}
+                {unavailable.map((e) => engineRequirements[e]).join("; ")}.
               </p>
             )}
           </div>

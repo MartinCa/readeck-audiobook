@@ -75,7 +75,7 @@ All settings are passed as environment variables (or via `.env`).
 | `VOXTRAL_VOICE` | No | `casual_female` | Default Voxtral voice; changeable under Settings → Voice |
 | `VOXTRAL_CHUNK_CHARS` | No | `1800` | Characters per Voxtral request; see the Voxtral section |
 | `VOXTRAL_MAX_NEW_TOKENS` | No | `4096` | Cap on the audio generated per request (the server's own default is 2048) |
-| `VOXTRAL_TARGET_DB` | No | `-20` | Level each chunk of speech is brought to, in dBFS; `off` disables levelling |
+| `VOXTRAL_TARGET_DB` | No | `-20` | Level each chunk of speech is brought to, in dBFS; `off` disables levelling. A value that is not a number is logged and the default kept |
 | `VOXTRAL_TIMEOUT_SECONDS` | No | `600` | How long to wait for one Voxtral request |
 | `MAX_CONCURRENT_JOBS` | No | `2` | Maximum simultaneous TTS jobs |
 | `DATA_DIR` | No | `/app/data` | Where the SQLite database lives |

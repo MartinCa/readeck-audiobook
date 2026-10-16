@@ -53,6 +53,8 @@ services:
     volumes:
       - hf_cache:/root/.cache/huggingface
     healthcheck:
+      # Answers once the model is loaded. This exact probe was checked against
+      # vllm/vllm-omni:v0.30.0 running Voxtral; recheck it when changing the tag.
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/v1/audio/voices', timeout=5)"]
       interval: 30s

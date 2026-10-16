@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 PARAGRAPH_GAP_SECONDS = 0.6
 SENTENCE_GAP_SECONDS = 0.3
 
+# Client errors that are worth retrying: request timeout and too many requests.
+RETRYABLE_STATUSES = {408, 429}
+
 
 @dataclass(frozen=True)
 class Chunk:
@@ -97,7 +100,13 @@ async def _request_chunk(client: httpx.AsyncClient, text: str, voice: str) -> by
             f"Cannot reach the Voxtral server at {config.VOXTRAL_URL}: {exc!r}"
         ) from exc
     if response.status_code >= 400:
-        raise RuntimeError(f"Voxtral server returned {response.status_code}: {response.text[:300]}")
+        message = f"Voxtral server returned {response.status_code}: {response.text[:300]}"
+        # A request the server rejects (a wrong model or voice, say) fails the
+        # same way every time; only a timeout, a rate limit or a server error is
+        # worth another go.
+        if response.status_code < 500 and response.status_code not in RETRYABLE_STATUSES:
+            raise tts.PermanentError(message)
+        raise RuntimeError(message)
     return response.content
 
 

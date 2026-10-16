@@ -6,8 +6,11 @@ Every tunable lives here so that paths are overridable for local development
 tests have a single place to patch.
 """
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _env_path(name: str, default: str) -> Path:
@@ -15,14 +18,22 @@ def _env_path(name: str, default: str) -> Path:
 
 
 def _env_float(name: str, default: float | None) -> float | None:
-    """A float setting; "off" or an unparsable value gives None."""
+    """A float setting.
+
+    Unset or empty gives the default, "off" (or "none") gives None, and a value
+    that is not a number is reported and gives the default, so a typo cannot
+    quietly switch a feature off.
+    """
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return default
+    if raw.strip().lower() in {"off", "none"}:
+        return None
     try:
         return float(raw)
     except ValueError:
-        return None
+        logger.warning("%s=%r is not a number or 'off'; using %s", name, raw, default)
+        return default
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:

@@ -232,6 +232,29 @@ class TestSynthesize:
         with pytest.raises(RuntimeError, match="Cannot reach the Voxtral server at http://voxtral"):
             await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
 
+    @pytest.mark.parametrize("status", [400, 401, 404, 422])
+    async def test_a_request_the_server_rejects_is_not_retried(
+        self, tmp_path, server, monkeypatch, status
+    ):
+        monkeypatch.setattr(voxtral.config, "TTS_MAX_RETRIES", 3)
+        server.reply = lambda request: httpx.Response(status, text="no such voice")
+        with pytest.raises(RuntimeError, match=f"failed: Voxtral server returned {status}"):
+            await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
+        assert len(server.requests) == 1
+
+    @pytest.mark.parametrize("status", [408, 429, 500, 503])
+    async def test_timeouts_rate_limits_and_server_errors_are_retried(
+        self, tmp_path, server, monkeypatch, status
+    ):
+        monkeypatch.setattr(voxtral.config, "TTS_MAX_RETRIES", 2)
+        monkeypatch.setattr(tts.asyncio, "sleep", lambda s: _noop())
+        replies = iter(
+            [httpx.Response(status, text="try later"), httpx.Response(200, content=_wav())]
+        )
+        server.reply = lambda request: next(replies)
+        await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
+        assert len(server.requests) == 2
+
     async def test_transient_failures_are_retried(self, tmp_path, server, monkeypatch):
         monkeypatch.setattr(voxtral.config, "TTS_MAX_RETRIES", 2)
         monkeypatch.setattr(tts.asyncio, "sleep", lambda s: _noop())

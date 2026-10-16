@@ -143,8 +143,10 @@ def resolve_engine_and_voice(
     wanted = engine or config.TTS_ENGINE
     if wanted == ENGINE_KOKORO and base in KOKORO_SUPPORTED_LANGS:
         return ENGINE_KOKORO, kokoro_voice or config.KOKORO_VOICE
-    if wanted == ENGINE_VOXTRAL and base in VOXTRAL_SUPPORTED_LANGS and voxtral_available():
-        return ENGINE_VOXTRAL, voxtral_voice or config.VOXTRAL_VOICE
+    if wanted == ENGINE_VOXTRAL and base in VOXTRAL_SUPPORTED_LANGS:
+        if voxtral_available():
+            return ENGINE_VOXTRAL, voxtral_voice or config.VOXTRAL_VOICE
+        logger.warning("Voxtral is the chosen engine but VOXTRAL_URL is not set; using edge-tts")
     return ENGINE_EDGE, _pick_voice(lang, edge_voice)
 
 
@@ -411,14 +413,23 @@ def _split_text(text: str, max_chars: int) -> list[str]:
     return merged
 
 
+class PermanentError(RuntimeError):
+    """A failure that trying again cannot fix, such as a request the server rejects."""
+
+
 async def _with_retries(factory, description: str):
-    """Run an async factory, retrying transient synthesis failures."""
+    """Run an async factory, retrying transient synthesis failures.
+
+    A `PermanentError` is not retried: it fails at once.
+    """
     last_error: Exception | None = None
     for attempt in range(1, config.TTS_MAX_RETRIES + 1):
         try:
             return await factory()
         except asyncio.CancelledError:
             raise
+        except PermanentError as exc:
+            raise RuntimeError(f"{description} failed: {exc}") from exc
         except Exception as exc:
             last_error = exc
             if attempt == config.TTS_MAX_RETRIES:

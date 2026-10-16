@@ -53,6 +53,51 @@ class TestResolveEngineAndVoice:
         assert tts.resolve_engine_and_voice("da") == ("edge-tts", "da-DK-ChristelNeural")
 
 
+class TestWithRetries:
+    @pytest.fixture(autouse=True)
+    def _no_waiting(self, monkeypatch):
+        monkeypatch.setattr(tts.config, "TTS_MAX_RETRIES", 3)
+
+        async def instant(seconds):
+            return None
+
+        monkeypatch.setattr(tts.asyncio, "sleep", instant)
+
+    async def test_a_transient_failure_is_retried_until_it_works(self):
+        calls = []
+
+        async def flaky():
+            calls.append(1)
+            if len(calls) < 3:
+                raise RuntimeError("busy")
+            return "audio"
+
+        assert await tts._with_retries(flaky, "chunk") == "audio"
+        assert len(calls) == 3
+
+    async def test_it_gives_up_after_the_configured_attempts(self):
+        calls = []
+
+        async def always():
+            calls.append(1)
+            raise RuntimeError("busy")
+
+        with pytest.raises(RuntimeError, match="chunk failed after 3 attempt"):
+            await tts._with_retries(always, "chunk")
+        assert len(calls) == 3
+
+    async def test_a_permanent_error_fails_at_once(self):
+        calls = []
+
+        async def rejected():
+            calls.append(1)
+            raise tts.PermanentError("422: no such voice")
+
+        with pytest.raises(RuntimeError, match="chunk failed: 422: no such voice"):
+            await tts._with_retries(rejected, "chunk")
+        assert len(calls) == 1
+
+
 class TestResolveVoxtral:
     def test_voxtral_for_english_when_a_server_is_configured(self, monkeypatch):
         monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
@@ -70,9 +115,18 @@ class TestResolveVoxtral:
         monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
         assert tts.resolve_engine_and_voice("de", "voxtral") == ("edge-tts", "de-DE-KatjaNeural")
 
-    def test_without_a_server_it_falls_back_to_edge_tts(self, monkeypatch):
+    def test_without_a_server_it_falls_back_to_edge_tts_and_says_so(self, monkeypatch, caplog):
         monkeypatch.setattr(tts.config, "VOXTRAL_URL", "")
-        assert tts.resolve_engine_and_voice("en", "voxtral")[0] == "edge-tts"
+        with caplog.at_level("WARNING", logger="app.tts"):
+            assert tts.resolve_engine_and_voice("en", "voxtral")[0] == "edge-tts"
+        assert "VOXTRAL_URL is not set" in caplog.text
+
+    def test_other_languages_fall_back_without_a_warning(self, monkeypatch, caplog):
+        """Voxtral is English only, so a German article going to edge-tts is expected."""
+        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "")
+        with caplog.at_level("WARNING", logger="app.tts"):
+            tts.resolve_engine_and_voice("de", "voxtral")
+        assert caplog.text == ""
 
     def test_only_the_servers_english_presets_are_offered(self):
         assert "casual_female" in tts.VOXTRAL_ENGLISH_VOICES
