@@ -515,6 +515,21 @@ async def retry_job(job_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+async def retry_jobs(job_ids: list[str]) -> int:
+    """Send the failed jobs among `job_ids` back to the queue; returns how many were."""
+    retried = 0
+    async with _connect() as db:
+        for chunk in _chunks(list(dict.fromkeys(job_ids))):
+            placeholders = ", ".join("?" * len(chunk))
+            async with db.execute(
+                "UPDATE jobs SET status = ?, error_msg = NULL, attempts = 0, updated_at = ? "
+                f"WHERE id IN ({placeholders}) AND status = ? RETURNING id",
+                (JobStatus.pending, _now(), *chunk, JobStatus.failed),
+            ) as cur:
+                retried += len(await cur.fetchall())
+    return retried
+
+
 # ── Auto generation bookkeeping ────────────────────────────────────────────────
 
 

@@ -450,6 +450,26 @@ async def test_delete_job_leaves_completed_audio_alone(client):
     assert await models.get_job(job["id"])
 
 
+async def test_bulk_retry_jobs_requeues_only_failed_ones(client):
+    failed = [await models.create_job(n, n, "http://x", "edge-tts", "v") for n in ("a", "b")]
+    for job in failed:
+        await models.update_job(
+            job["id"], status=models.JobStatus.failed, error_msg="x", attempts=3
+        )
+    pending = await models.create_job("c", "C", "http://x", "edge-tts", "v")
+    done = await models.create_job("d", "D", "http://x", "edge-tts", "v")
+    await models.update_job(done["id"], status=models.JobStatus.completed, audio_path="d.mp3")
+
+    ids = [*(j["id"] for j in failed), pending["id"], done["id"], "nope"]
+    resp = await client.post("/api/jobs/bulk-retry", json={"jobIds": ids})
+    assert resp.json() == {"count": 2}
+    for job in failed:
+        row = await models.get_job(job["id"])
+        assert (row["status"], row["error_msg"], row["attempts"]) == ("pending", None, 0)
+    assert (await models.get_job(done["id"]))["status"] == "completed"
+    assert (await client.post("/api/jobs/bulk-retry", json={"jobIds": ids})).json() == {"count": 0}
+
+
 async def test_bulk_delete_jobs(client):
     a = await models.create_job("a", "A", "http://x", "edge-tts", "v")
     b = await models.create_job("b", "B", "http://x", "edge-tts", "v")

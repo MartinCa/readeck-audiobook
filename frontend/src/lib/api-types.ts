@@ -167,6 +167,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/jobs/bulk-retry": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Bulk Retry Jobs */
+    post: operations["bulk_retry_jobs_api_jobs_bulk_retry_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/jobs/ids": {
     parameters: {
       query?: never;
@@ -902,6 +919,39 @@ export interface operations {
     };
   };
   bulk_delete_jobs_api_jobs_bulk_delete_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["JobIds"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CountResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  bulk_retry_jobs_api_jobs_bulk_retry_post: {
     parameters: {
       query?: never;
       header?: never;
