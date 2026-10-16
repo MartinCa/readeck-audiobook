@@ -121,7 +121,8 @@ async def _ensure_running() -> None:
         if await _answering():
             return
         state = await _inspect()
-        if not state.get("Running"):
+        already_running = bool(state.get("Running"))
+        if not already_running:
             logger.info(
                 "Starting the Voxtral container %s (a cold start takes minutes)",
                 config.VOXTRAL_CONTAINER,
@@ -133,6 +134,13 @@ async def _ensure_running() -> None:
         try:
             while not await _answering():
                 if time.monotonic() - began > config.VOXTRAL_START_TIMEOUT_SECONDS:
+                    if already_running:
+                        raise RuntimeError(
+                            f"The Voxtral container is running but the server at "
+                            f"{config.VOXTRAL_URL} did not answer within "
+                            f"{config.VOXTRAL_START_TIMEOUT_SECONDS}s. Check VOXTRAL_URL and the "
+                            "container's log."
+                        )
                     raise RuntimeError(
                         f"The Voxtral server did not answer within "
                         f"{config.VOXTRAL_START_TIMEOUT_SECONDS}s of starting"
@@ -198,8 +206,12 @@ async def _stop_if_idle() -> None:
     async with _guard():
         if _users > 0:
             return
-        _stopping = True
         try:
+            if not (await _inspect()).get("Running"):
+                # Already stopped, say after a start that failed: Docker would
+                # answer 304, and there is nothing to report.
+                return
+            _stopping = True
             await _docker(
                 "POST",
                 f"/containers/{config.VOXTRAL_CONTAINER}/stop",

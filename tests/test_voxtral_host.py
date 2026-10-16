@@ -126,6 +126,15 @@ class TestAcquire:
         with pytest.raises(RuntimeError, match="did not answer"):
             await host.acquire()
 
+    async def test_a_running_container_that_never_answers_is_not_called_a_start(
+        self, docker, monkeypatch
+    ):
+        monkeypatch.setattr(host.config, "VOXTRAL_START_TIMEOUT_SECONDS", 0)
+        docker.running, docker.ready_after = True, 10**6
+        with pytest.raises(RuntimeError, match="is running but the server at .* VOXTRAL_URL"):
+            await host.acquire()
+        assert posts(docker, "start") == []
+
     async def test_concurrent_jobs_start_it_once(self, docker):
         docker.ready_after = 5
         await asyncio.gather(host.acquire(), host.acquire(), host.acquire())
@@ -165,6 +174,21 @@ class TestIdleStop:
         host.release()
         assert host._stop_timer is None
         assert posts(docker, "stop") == []
+
+    async def test_an_already_stopped_container_is_not_stopped_or_reported(
+        self, docker, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(host.config, "VOXTRAL_IDLE_STOP_SECONDS", 0.05)
+        monkeypatch.setattr(host.config, "VOXTRAL_START_TIMEOUT_SECONDS", 0)
+        docker.ready_after = 10**6
+        with pytest.raises(RuntimeError):  # the start times out ...
+            await host.acquire()
+        docker.running = False  # ... and the container is down
+        host.release()  # the job's finally re-arms the idle stop
+        with caplog.at_level("INFO", logger=host.logger.name):
+            await asyncio.sleep(0.3)
+        assert posts(docker, "stop") == []
+        assert "Stopped the Voxtral container" not in caplog.text
 
     async def test_a_failing_stop_is_logged_not_raised(self, docker, monkeypatch):
         monkeypatch.setattr(host.config, "VOXTRAL_IDLE_STOP_SECONDS", 0.05)
