@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { Trash2Icon, XIcon } from "lucide-react";
+import { RotateCcwIcon, Trash2Icon, XIcon } from "lucide-react";
 import { z } from "zod";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorState } from "@/components/ErrorState";
@@ -11,7 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { jobsApi } from "@/features/jobs/api";
 import { JobCard } from "@/features/jobs/components/JobCard";
-import { useDeleteJobs, useJobs } from "@/features/jobs/hooks";
+import { useDeleteJobs, useJobs, useRetryJobs } from "@/features/jobs/hooks";
 import { plural } from "@/lib/format";
 import { notifications } from "@/lib/notifications";
 
@@ -29,6 +29,7 @@ function JobsPage() {
   const navigate = Route.useNavigate();
   const jobs = useJobs(page);
   const removeMany = useDeleteJobs();
+  const retryMany = useRetryJobs();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -56,6 +57,18 @@ function JobsPage() {
         description: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  function retrySelected() {
+    retryMany.mutate([...selected], {
+      onSuccess: ({ count }) => {
+        if (count > 0) notifications.success(`Queued ${plural(count, "job")} again`);
+        else notifications.info("None of the selected jobs have failed");
+        setSelected(new Set());
+      },
+      onError: (error) =>
+        notifications.error("Could not retry the jobs", { description: error.message }),
+    });
   }
 
   function deleteSelected() {
@@ -123,6 +136,15 @@ function JobsPage() {
                   Clear
                 </Button>
                 <div className="flex-1" />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={retryMany.isPending}
+                  onClick={retrySelected}
+                >
+                  <RotateCcwIcon aria-hidden />
+                  Retry selected
+                </Button>
                 <Button variant="destructive" size="sm" onClick={() => setConfirmDelete(true)}>
                   <Trash2Icon aria-hidden />
                   Delete selected

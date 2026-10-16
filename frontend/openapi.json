@@ -1470,6 +1470,44 @@
         "summary": "Bulk Delete Jobs"
       }
     },
+    "/api/jobs/bulk-retry": {
+      "post": {
+        "operationId": "bulk_retry_jobs_api_jobs_bulk_retry_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bulk Retry Jobs"
+      }
+    },
     "/api/jobs/ids": {
       "get": {
         "operationId": "list_job_ids_api_jobs_ids_get",

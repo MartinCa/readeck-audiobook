@@ -5,6 +5,7 @@ export const jobsApi = {
   list: (page: number) => api.get<JobPage>("/jobs", { query: { page } }),
   allIds: () => api.get<string[]>("/jobs/ids"),
   retry: (id: string) => api.post<Job>(`/jobs/${encodeURIComponent(id)}/retry`),
+  retryMany: (jobIds: string[]) => api.post<CountResult>("/jobs/bulk-retry", { jobIds }),
   remove: (id: string) => api.delete<void>(`/jobs/${encodeURIComponent(id)}`),
   removeMany: (jobIds: string[]) => api.post<CountResult>("/jobs/bulk-delete", { jobIds }),
 };

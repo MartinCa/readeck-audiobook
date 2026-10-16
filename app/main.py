@@ -304,6 +304,13 @@ async def retry_job(job_id: str):
     return Job.from_row(job)
 
 
+@app.post("/api/jobs/bulk-retry", response_model=CountResult)
+async def bulk_retry_jobs(body: JobIds):
+    # Only failed jobs go back to the queue; anything else in the selection is
+    # already queued, running, or finished.
+    return CountResult(count=await models.retry_jobs(body.job_ids))
+
+
 @app.delete("/api/jobs/{job_id}", status_code=204)
 async def delete_job(job_id: str):
     # As with bulk delete: a job that completed since the list loaded is now

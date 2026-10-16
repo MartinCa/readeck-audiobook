@@ -351,6 +351,7 @@ The API is JSON with camelCase fields; errors are `application/problem+json`. Th
 | `GET` | `/api/jobs/{id}` | One job |
 | `POST` | `/api/jobs/{id}/retry` | Queue a failed job again |
 | `DELETE` | `/api/jobs/{id}` | Delete a job and its audio file |
+| `POST` | `/api/jobs/bulk-retry` | Queue the failed jobs among several again |
 | `POST` | `/api/jobs/bulk-delete` | Delete several jobs at once |
 | `GET` / `PUT` | `/api/settings` | Sync, auto generation and generation settings, with the last/next runs |
 | `POST` | `/api/auto-generation/run` | Run auto generation now |

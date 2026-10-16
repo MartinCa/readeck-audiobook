@@ -36,6 +36,11 @@ export function useRetryJob() {
   return useMutation({ mutationFn: jobsApi.retry, onSuccess: invalidate });
 }
 
+export function useRetryJobs() {
+  const invalidate = useInvalidateAll();
+  return useMutation({ mutationFn: jobsApi.retryMany, onSuccess: invalidate });
+}
+
 export function useDeleteJob() {
   const invalidate = useInvalidateAll();
   return useMutation({ mutationFn: jobsApi.remove, onSuccess: invalidate });
