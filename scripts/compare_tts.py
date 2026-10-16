@@ -165,28 +165,92 @@ def _rms_db(samples: array.array) -> float:
     return 20 * math.log10(rms / 32768)
 
 
-def _level(frames: bytes, target_db: float | None) -> tuple[bytes, float, float, float, float]:
-    """RMS and peak of 16-bit PCM in dBFS; optionally scaled so the RMS hits target_db.
+WINDOW_SECONDS = 0.05
+SPEECH_RANGE_DB = 25  # a window counts as speech within this of the loud ones
+TRIM_MARGIN_SECONDS = 0.05
+EDGE_FADE_SECONDS = 0.01
+PEAK_CEILING = 10 ** (-0.5 / 20)
 
-    The gain is capped so the peak stays below -0.5 dBFS rather than clipping.
+
+def _window_db(samples: array.array, window: int) -> list[float]:
+    return [_rms_db(samples[i : i + window]) for i in range(0, len(samples), window)]
+
+
+def _mean_db(values: list[float]) -> float:
+    """Average level of several windows, by power."""
+    if not values:
+        return -math.inf
+    return 10 * math.log10(sum(10 ** (v / 10) for v in values) / len(values))
+
+
+def condition_chunk(frames: bytes, rate: int, target_db: float | None) -> tuple[bytes, dict]:
+    """Prepare one 16-bit mono chunk so it joins its neighbours without a seam.
+
+    - Trims the silence the model leaves around the speech, so the gap between
+      chunks is the one we insert and not a random extra.
+    - Fades the cut edges over 10 ms, so they cannot click.
+    - With target_db, rides the gain along a straight line in dB so the start
+      and the end of the speech both land on the target. That evens out the
+      fade-out each chunk has and makes the last second of one chunk match the
+      first of the next, instead of one constant gain per chunk with a step at
+      every seam. The gain is capped so the peak stays below -0.5 dBFS.
     """
     samples = array.array("h")
     samples.frombytes(frames)
     if sys.byteorder == "big":
         samples.byteswap()
-    if not samples:
-        return frames, -math.inf, -math.inf, -math.inf, -math.inf
-    quarter = max(1, len(samples) // 4)
-    start_db, end_db = _rms_db(samples[:quarter]), _rms_db(samples[-quarter:])
-    peak = max(abs(x) for x in samples) or 1
-    rms_db, peak_db = _rms_db(samples), 20 * math.log10(peak / 32768)
+    window = max(1, int(rate * WINDOW_SECONDS))
+    levels = _window_db(samples, window)
+    if not levels:
+        return frames, {}
+    gate = sorted(levels)[int(0.9 * (len(levels) - 1))] - SPEECH_RANGE_DB
+    speech = [i for i, v in enumerate(levels) if v >= gate]
+    if not speech:
+        return frames, {}
+
+    margin = int(rate * TRIM_MARGIN_SECONDS)
+    lo = max(0, speech[0] * window - margin)
+    hi = min(len(samples), (speech[-1] + 1) * window + margin)
+    kept = samples[lo:hi]
+    n = len(kept)
+
+    kept_levels = _window_db(kept, window)
+    voiced = [i for i, v in enumerate(kept_levels) if v >= gate]
+    head = [kept_levels[i] for i in voiced if i < len(kept_levels) * 0.25]
+    tail = [kept_levels[i] for i in voiced if i >= len(kept_levels) * 0.75]
+    start_db = _mean_db(head) if head else _mean_db([kept_levels[i] for i in voiced])
+    end_db = _mean_db(tail) if tail else _mean_db([kept_levels[i] for i in voiced])
+
+    gains = [1.0] * n
+    gain_start_db = gain_end_db = 0.0
     if target_db is not None:
-        gain = min(10 ** ((target_db - rms_db) / 20), 10 ** (-0.5 / 20) * 32768 / peak)
-        scaled = array.array("h", (max(-32768, min(32767, round(x * gain))) for x in samples))
-        if sys.byteorder == "big":
-            scaled.byteswap()
-        return scaled.tobytes(), rms_db, peak_db, start_db, end_db
-    return frames, rms_db, peak_db, start_db, end_db
+        gain_start_db, gain_end_db = target_db - start_db, target_db - end_db
+        slope = (gain_end_db - gain_start_db) / 0.75
+        gains = [10 ** ((gain_start_db + slope * (k / n - 0.125)) / 20) for k in range(n)]
+    scaled = [x * g for x, g in zip(kept, gains, strict=True)]
+    loudest = max((abs(x) for x in scaled), default=0)
+    if loudest > 32767 * PEAK_CEILING:
+        scaled = [x * 32767 * PEAK_CEILING / loudest for x in scaled]
+
+    fade = min(int(rate * EDGE_FADE_SECONDS), n // 2)
+    for k in range(fade):
+        ramp = k / fade
+        scaled[k] *= ramp
+        scaled[n - 1 - k] *= ramp
+
+    out = array.array("h", (max(-32768, min(32767, round(x))) for x in scaled))
+    if sys.byteorder == "big":
+        out.byteswap()
+    peak = max((abs(x) for x in out), default=0) or 1
+    return out.tobytes(), {
+        "lead": lo / rate,
+        "tail": (len(samples) - hi) / rate,
+        "start_db": start_db,
+        "end_db": end_db,
+        "gain_start_db": gain_start_db,
+        "gain_end_db": gain_end_db,
+        "peak_db": 20 * math.log10(peak / 32768),
+    }
 
 
 def run_voxtral(
@@ -196,6 +260,7 @@ def run_voxtral(
     voice: str,
     chunk_chars: int,
     level_db: float | None = None,
+    gap_seconds: float = 0.35,
 ) -> dict:
     """Synthesize through a vLLM-Omni server's OpenAI-style /v1/audio/speech route."""
     try:
@@ -236,20 +301,26 @@ def run_voxtral(
                     writer = wave.open(str(wav_path), "wb")
                     writer.setparams(piece.getparams())
                     gap = b"\x00" * (
-                        int(piece.getframerate() * CHUNK_GAP_SECONDS)
+                        int(piece.getframerate() * gap_seconds)
                         * piece.getsampwidth()
                         * piece.getnchannels()
                     )
                 frames = piece.readframes(piece.getnframes())
-                if piece.getsampwidth() == 2:
-                    frames, rms_db, peak_db, start_db, end_db = _level(frames, level_db)
-                    seconds = piece.getnframes() / piece.getframerate()
-                    print(
-                        f"      {seconds:5.1f}s  RMS {rms_db:6.1f}  peak {peak_db:6.1f} dBFS"
-                        f"  first quarter {start_db:6.1f}  last quarter {end_db:6.1f} dBFS"
-                        + ("  (before leveling)" if level_db is not None else ""),
-                        flush=True,
-                    )
+                if piece.getsampwidth() == 2 and piece.getnchannels() == 1:
+                    frames, info = condition_chunk(frames, piece.getframerate(), level_db)
+                    if info:
+                        print(
+                            f"      trimmed {info['lead']:.2f}s lead, {info['tail']:.2f}s tail"
+                            f" | speech level start {info['start_db']:6.1f}"
+                            f" end {info['end_db']:6.1f} dBFS"
+                            + (
+                                f" | gain {info['gain_start_db']:+.1f} to"
+                                f" {info['gain_end_db']:+.1f} dB"
+                                if level_db is not None
+                                else ""
+                            ),
+                            flush=True,
+                        )
                 writer.writeframes(frames)
                 writer.writeframes(gap)
         if writer is None:
@@ -322,6 +393,12 @@ def main() -> int:
         "--voxtral-level",
         type=float,
         help="scale every Voxtral chunk to this RMS in dBFS (e.g. -20) to even out volume drift",
+    )
+    parser.add_argument(
+        "--voxtral-gap",
+        type=float,
+        default=0.35,
+        help="silence between Voxtral chunks in seconds (default 0.35)",
     )
     parser.add_argument("--ref-audio", help="reference clip for the Chatterbox engines")
     parser.add_argument(
@@ -397,6 +474,7 @@ def main() -> int:
                             v,
                             args.voxtral_chunk_chars,
                             args.voxtral_level,
+                            args.voxtral_gap,
                         ),
                     )
                 )
