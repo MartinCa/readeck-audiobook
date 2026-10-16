@@ -4,7 +4,10 @@ import array
 import io
 import json
 import math
+import shutil
+import subprocess
 import wave
+from pathlib import Path
 
 import httpx
 import pytest
@@ -13,6 +16,7 @@ from app import tts, voxtral
 
 RATE = 24000
 REAL_ASYNC_CLIENT = httpx.AsyncClient
+REAL_RUN = subprocess.run
 
 
 def _wav(seconds=2.0, amp=6000, lead=0.3, tail=0.4, *, width=2, channels=1) -> bytes:
@@ -31,23 +35,44 @@ def _wav(seconds=2.0, amp=6000, lead=0.3, tail=0.4, *, width=2, channels=1) -> b
 
 @pytest.fixture
 def server(monkeypatch):
-    """A fake Voxtral server: records requests, answers with `reply(request)`."""
+    """A fake Voxtral server: records requests, answers with `reply(request)`.
+
+    ffmpeg is faked too (CI has none): the commands it is given are recorded in
+    `ffmpeg` and a placeholder is written where the MP3 would go. Tests that
+    need the real encoder ask for `real_ffmpeg`.
+    """
     monkeypatch.setattr(voxtral.config, "VOXTRAL_URL", "http://voxtral.test")
     monkeypatch.setattr(voxtral.config, "TTS_MAX_RETRIES", 1)  # no sleeping between retries
     state = type("FakeServer", (), {})()
     state.requests = []
+    state.ffmpeg = []
+    state.ffmpeg_returncode = 0
     state.reply = lambda request: httpx.Response(200, content=_wav())
 
     def handler(request: httpx.Request) -> httpx.Response:
         state.requests.append(json.loads(request.content))
         return state.reply(request)
 
+    def fake_run(cmd, **kwargs):
+        state.ffmpeg.append(cmd)
+        if state.ffmpeg_returncode == 0:
+            Path(cmd[-1]).write_bytes(b"mp3")
+        return subprocess.CompletedProcess(cmd, state.ffmpeg_returncode, b"", b"no such codec")
+
+    monkeypatch.setattr(voxtral.subprocess, "run", fake_run)
     monkeypatch.setattr(
         voxtral.httpx,
         "AsyncClient",
         lambda **kw: REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handler), **kw),
     )
     return state
+
+
+@pytest.fixture
+def real_ffmpeg(server, monkeypatch):
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg is not installed")
+    monkeypatch.setattr(voxtral.subprocess, "run", REAL_RUN)
 
 
 class TestSplitText:
@@ -119,7 +144,7 @@ class TestSynthesize:
         assert server.requests[0]["voice"] == "cheerful_female"
 
     async def test_writes_an_mp3_the_length_of_the_speech_gaps_and_end_silence(
-        self, tmp_path, server, monkeypatch
+        self, tmp_path, server, real_ffmpeg, monkeypatch
     ):
         monkeypatch.setattr(voxtral.config, "VOXTRAL_CHUNK_CHARS", 200)
         text = "\n\n".join(["Word " * 30] * 3)  # three chunks, paragraph breaks between
@@ -130,11 +155,24 @@ class TestSynthesize:
         expected = 3 * 2.1 + 2 * voxtral.PARAGRAPH_GAP_SECONDS + tts.END_SILENCE_SECONDS
         assert abs(tts.audio_duration(out) - expected) < 0.5
 
-    async def test_the_models_own_edge_silence_is_trimmed(self, tmp_path, server):
+    async def test_the_models_own_edge_silence_is_trimmed(self, tmp_path, server, real_ffmpeg):
         server.reply = lambda request: httpx.Response(200, content=_wav(2.0, lead=1.5, tail=1.5))
         out = tmp_path / "out.mp3"
         await voxtral.synthesize_voxtral("Hello there.", out)
         assert abs(tts.audio_duration(out) - (2.1 + tts.END_SILENCE_SECONDS)) < 0.5
+
+    async def test_encodes_the_joined_audio_to_the_output_path(self, tmp_path, server):
+        out = tmp_path / "out.mp3.part"
+        await voxtral.synthesize_voxtral("Hello there.", out)
+        (cmd,) = server.ffmpeg
+        assert cmd[0] == "ffmpeg" and cmd[-1] == str(out)
+        assert cmd[cmd.index("-f") + 1] == "mp3"  # the .part name tells ffmpeg nothing
+        assert out.read_bytes() == b"mp3"
+
+    async def test_an_ffmpeg_failure_is_reported(self, tmp_path, server):
+        server.ffmpeg_returncode = 1
+        with pytest.raises(RuntimeError, match="ffmpeg failed encoding Voxtral.*no such codec"):
+            await voxtral.synthesize_voxtral("Hello there.", tmp_path / "out.mp3")
 
     async def test_reports_progress_per_chunk(self, tmp_path, server, monkeypatch):
         monkeypatch.setattr(voxtral.config, "VOXTRAL_CHUNK_CHARS", 200)
