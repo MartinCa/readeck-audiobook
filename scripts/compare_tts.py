@@ -18,6 +18,8 @@ Engines (each is skipped with a message when its dependencies are missing):
     edge             edge-tts; needs network access
     chatterbox-turbo Chatterbox Turbo (350M, English)
     chatterbox       the original Chatterbox (500M), which has a default voice
+    voxtral          Mistral Voxtral TTS, called over HTTP on a vLLM-Omni server
+                     you start separately (see --voxtral-url); stdlib only
 
 The two Chatterbox engines need PyTorch and are best run from a separate venv:
 
@@ -34,11 +36,15 @@ import argparse
 import asyncio
 import gc
 import html
+import io
 import json
 import subprocess
 import sys
 import time
 import traceback
+import urllib.error
+import urllib.request
+import wave
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,7 +54,8 @@ from app import tts  # noqa: E402
 
 # Gap between Chatterbox chunks, which it generates one at a time.
 CHUNK_GAP_SECONDS = 0.3
-ENGINES = ("kokoro", "edge", "chatterbox-turbo", "chatterbox")
+ENGINES = ("kokoro", "edge", "chatterbox-turbo", "chatterbox", "voxtral")
+VOXTRAL_MODEL = "mistralai/Voxtral-4B-TTS-2603"
 
 
 def truncate(cleaned: str, max_chars: int) -> str:
@@ -144,6 +151,66 @@ def run_chatterbox(
     return {"load_seconds": round(load_seconds, 1), "peak_vram_gb": round(peak_vram_gb, 2)}
 
 
+def _http_json(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=30) as resp:
+        return json.load(resp)
+
+
+def run_voxtral(text: str, out: Path, url: str, voice: str, chunk_chars: int) -> dict:
+    """Synthesize through a vLLM-Omni server's OpenAI-style /v1/audio/speech route."""
+    try:
+        voices = _http_json(f"{url}/v1/audio/voices").get("voices", [])
+    except (urllib.error.URLError, OSError) as exc:
+        raise RuntimeError(f"Cannot reach the Voxtral server at {url}: {exc}") from exc
+    if voices and voice not in voices:
+        raise RuntimeError(
+            f"Unknown Voxtral voice {voice!r}. The server offers: {', '.join(voices)}"
+        )
+
+    chunks = tts._split_text(text, chunk_chars)
+    wav_path = out.with_suffix(".wav")
+    try:
+        writer = None
+        for index, chunk in enumerate(chunks, 1):
+            print(f"    chunk {index}/{len(chunks)}", flush=True)
+            body = json.dumps(
+                {
+                    "model": VOXTRAL_MODEL,
+                    "input": chunk,
+                    "voice": voice,
+                    "language": "English",
+                    "response_format": "wav",
+                }
+            ).encode()
+            request = urllib.request.Request(
+                f"{url}/v1/audio/speech", body, {"Content-Type": "application/json"}
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=600) as resp:
+                    data = resp.read()
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode(errors="replace")[:500]
+                raise RuntimeError(f"Voxtral server returned {exc.code}: {detail}") from exc
+            with wave.open(io.BytesIO(data)) as piece:
+                if writer is None:
+                    writer = wave.open(str(wav_path), "wb")
+                    writer.setparams(piece.getparams())
+                    gap = b"\x00" * (
+                        int(piece.getframerate() * CHUNK_GAP_SECONDS)
+                        * piece.getsampwidth()
+                        * piece.getnchannels()
+                    )
+                writer.writeframes(piece.readframes(piece.getnframes()))
+                writer.writeframes(gap)
+        if writer is None:
+            raise RuntimeError("No readable text to synthesize")
+        writer.close()
+        encode_mp3(wav_path, out)
+    finally:
+        wav_path.unlink(missing_ok=True)
+    return {}
+
+
 def build_index(results: list[dict]) -> str:
     rows, players = [], []
     for r in results:
@@ -186,6 +253,20 @@ def main() -> int:
     parser.add_argument("--kokoro-voice", action="append", help="repeatable (default af_heart)")
     parser.add_argument(
         "--edge-voice", action="append", help="repeatable (default en-US-AriaNeural)"
+    )
+    parser.add_argument(
+        "--voxtral-url",
+        default="http://localhost:8091",
+        help="vLLM-Omni server running Voxtral (default http://localhost:8091)",
+    )
+    parser.add_argument(
+        "--voxtral-voice", action="append", help="repeatable (default casual_female)"
+    )
+    parser.add_argument(
+        "--voxtral-chunk-chars",
+        type=int,
+        default=500,
+        help="text per Voxtral request (default 500, the length the model card benchmarks)",
     )
     parser.add_argument("--ref-audio", help="reference clip for the Chatterbox engines")
     parser.add_argument(
@@ -248,6 +329,16 @@ def main() -> int:
         elif engine == "edge":
             for voice in args.edge_voice or ["en-US-AriaNeural"]:
                 jobs.append((f"edge-{voice}", lambda out, v=voice: run_edge(text, out, v)))
+        elif engine == "voxtral":
+            for voice in args.voxtral_voice or ["casual_female"]:
+                jobs.append(
+                    (
+                        f"voxtral-{voice}",
+                        lambda out, v=voice: run_voxtral(
+                            text, out, args.voxtral_url.rstrip("/"), v, args.voxtral_chunk_chars
+                        ),
+                    )
+                )
         else:
             turbo = engine == "chatterbox-turbo"
             options = {} if turbo else original_options
