@@ -326,14 +326,14 @@ class TestIdleSleep:
         self, tmp_path, server, monkeypatch
     ):
         monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0.05)
-        monkeypatch.setattr(voxtral.config, "VOXTRAL_SLEEP_LEVEL", 2)
+        monkeypatch.setattr(voxtral.config, "VOXTRAL_SLEEP_LEVEL", 1)
         calls = self._controls(server)
         await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
         assert [path for path, _ in calls] == ["/v1/omni/wakeup"]
         assert calls[0][1] == {"stage_ids": [0, 1]}
         await asyncio.sleep(0.3)
         assert [path for path, _ in calls] == ["/v1/omni/wakeup", "/v1/omni/sleep"]
-        assert calls[1][1] == {"stage_ids": [0, 1], "level": 2}
+        assert calls[1][1] == {"stage_ids": [0, 1], "level": 1}
 
     async def test_a_new_job_cancels_the_pending_sleep(self, tmp_path, server, monkeypatch):
         monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0.2)
@@ -367,14 +367,31 @@ class TestIdleSleep:
             ("/v1/omni/sleep", [1]),
         ]
 
-    async def test_a_failing_control_call_does_not_fail_the_job(
+    async def test_a_failing_sleep_does_not_fail_the_job(self, tmp_path, server, monkeypatch):
+        monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0.05)
+        base = server.reply
+
+        def reply(request):
+            if request.url.path.endswith("/sleep"):
+                return httpx.Response(501, json={"detail": "no"})
+            if "/v1/omni/" in str(request.url):
+                return httpx.Response(200, json={"status": "SKIPPED"})
+            return base(request)
+
+        server.reply = reply
+        await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
+        await asyncio.sleep(0.2)
+        assert (tmp_path / "out.mp3").exists()
+
+    async def test_a_failing_wake_fails_the_job_without_sending_speech(
         self, tmp_path, server, monkeypatch
     ):
-        monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0.05)
+        monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 300)
         base = server.reply
         server.reply = lambda r: (
             httpx.Response(501, json={"detail": "no"}) if "/v1/omni/" in str(r.url) else base(r)
         )
-        await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
-        await asyncio.sleep(0.2)
-        assert (tmp_path / "out.mp3").exists()
+        with pytest.raises(RuntimeError, match="wake the Voxtral server"):
+            await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
+        assert voxtral._users == 0
+        assert server.requests == [{"stage_ids": [0, 1]}]  # only the wakeup, no speech

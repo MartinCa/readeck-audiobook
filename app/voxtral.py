@@ -56,18 +56,18 @@ async def _control(action: str, body: dict) -> bool:
     return True
 
 
-async def _control_stages(action: str, extra: dict) -> bool:
-    """Run a sleep or wakeup control on every configured stage; True if any took.
+async def _sleep_stages() -> bool:
+    """Put every configured stage to sleep; True if any went.
 
     All the stages go in one call. If the server refuses that (a stage that
     cannot sleep, say), they are tried one by one, so the ones that can still do.
     """
-    stages = config.VOXTRAL_SLEEP_STAGES
-    if await _control(action, {"stage_ids": stages, **extra}):
+    stages, level = config.VOXTRAL_SLEEP_STAGES, config.VOXTRAL_SLEEP_LEVEL
+    if await _control("sleep", {"stage_ids": stages, "level": level}):
         return True
     if len(stages) < 2:
         return False
-    results = [await _control(action, {"stage_ids": [stage], **extra}) for stage in stages]
+    results = [await _control("sleep", {"stage_ids": [s], "level": level}) for s in stages]
     return any(results)
 
 
@@ -79,10 +79,19 @@ def _lock() -> asyncio.Lock:
 
 
 async def _wake() -> None:
-    """Make sure the server is awake. Waking one that is not asleep is a no-op there."""
+    """Make sure the server is awake. Waking one that is not asleep is a no-op there.
+
+    A wake that fails is an error: the speech requests would go to a server whose
+    model is not loaded and hang until they time out. (vLLM-Omni 0.30.0 cannot
+    wake from level 2 at all; only a restart of the server brings it back.)
+    """
     async with _lock():
-        if await _control_stages("wakeup", {}):
-            logger.debug("Voxtral server awake")
+        if not await _control("wakeup", {"stage_ids": config.VOXTRAL_SLEEP_STAGES}):
+            raise RuntimeError(
+                "Could not wake the Voxtral server from sleep; see the log above. If it was "
+                "put to sleep at level 2, restart it: that level cannot be woken."
+            )
+        logger.debug("Voxtral server awake")
 
 
 async def _sleep_if_idle() -> None:
@@ -90,7 +99,7 @@ async def _sleep_if_idle() -> None:
     async with _lock():
         if _users > 0:
             return
-        if await _control_stages("sleep", {"level": config.VOXTRAL_SLEEP_LEVEL}):
+        if await _sleep_stages():
             logger.info(
                 "Voxtral server asleep after %ss idle, releasing its GPU memory. "
                 "The next Voxtral job wakes it.",

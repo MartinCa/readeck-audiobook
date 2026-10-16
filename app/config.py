@@ -109,9 +109,15 @@ VOXTRAL_TARGET_DB = _env_float("VOXTRAL_TARGET_DB", -20.0)
 # is what a server started without that flag needs (the control calls would
 # fail and be logged on every job).
 VOXTRAL_IDLE_SLEEP_SECONDS = _env_int("VOXTRAL_IDLE_SLEEP_SECONDS", 300, minimum=0)
-# 1 moves the weights to host RAM (quick to wake); 2 discards them (frees more
-# and needs no host RAM, but the wake reloads from disk).
-VOXTRAL_SLEEP_LEVEL = min(2, _env_int("VOXTRAL_SLEEP_LEVEL", 2))
+# 1 moves the weights to host RAM and back (quick to wake). 2 discards them,
+# but vLLM-Omni 0.30.0 cannot wake from it ("not yet implemented"): the server
+# stays asleep until it is restarted. Keep 1 unless a newer server supports it.
+VOXTRAL_SLEEP_LEVEL = min(2, _env_int("VOXTRAL_SLEEP_LEVEL", 1))
+if VOXTRAL_SLEEP_LEVEL == 2 and VOXTRAL_IDLE_SLEEP_SECONDS > 0:
+    logger.warning(
+        "VOXTRAL_SLEEP_LEVEL=2: vLLM-Omni 0.30.0 cannot wake from level 2, so the first "
+        "Voxtral job after an idle spell will fail until the server is restarted"
+    )
 # vLLM-Omni pipeline stages to put to sleep: every stage Voxtral has. Stage 0 is
 # the language model, which holds nearly all of the memory; stage 1 is the audio
 # decoder.
