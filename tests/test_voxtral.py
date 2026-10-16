@@ -330,10 +330,10 @@ class TestIdleSleep:
         calls = self._controls(server)
         await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
         assert [path for path, _ in calls] == ["/v1/omni/wakeup"]
-        assert calls[0][1] == {"stage_ids": [0]}
+        assert calls[0][1] == {"stage_ids": [0, 1]}
         await asyncio.sleep(0.3)
         assert [path for path, _ in calls] == ["/v1/omni/wakeup", "/v1/omni/sleep"]
-        assert calls[1][1] == {"stage_ids": [0], "level": 2}
+        assert calls[1][1] == {"stage_ids": [0, 1], "level": 2}
 
     async def test_a_new_job_cancels_the_pending_sleep(self, tmp_path, server, monkeypatch):
         monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0.2)
@@ -342,6 +342,30 @@ class TestIdleSleep:
         await voxtral.synthesize_voxtral("Hello.", tmp_path / "b.mp3")
         await asyncio.sleep(0.5)
         assert [path for path, _ in calls].count("/v1/omni/sleep") == 1
+
+    async def test_falls_back_to_one_stage_at_a_time(self, tmp_path, server, monkeypatch):
+        monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0.05)
+        calls = []
+        base = server.reply
+
+        def reply(request):
+            if "/v1/omni/" in str(request.url):
+                body = json.loads(request.content)
+                calls.append((request.url.path, body["stage_ids"]))
+                # Stage 1 cannot sleep, so a call that includes it is refused.
+                if request.url.path.endswith("/sleep") and 1 in body["stage_ids"]:
+                    return httpx.Response(500, json={"detail": "no"})
+                return httpx.Response(200, json={"status": "SUCCESS", "acks": []})
+            return base(request)
+
+        server.reply = reply
+        await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
+        await asyncio.sleep(0.3)
+        assert [c for c in calls if c[0].endswith("/sleep")] == [
+            ("/v1/omni/sleep", [0, 1]),
+            ("/v1/omni/sleep", [0]),
+            ("/v1/omni/sleep", [1]),
+        ]
 
     async def test_a_failing_control_call_does_not_fail_the_job(
         self, tmp_path, server, monkeypatch
