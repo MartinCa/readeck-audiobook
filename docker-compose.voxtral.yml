@@ -48,8 +48,6 @@ services:
   voxtral:
     # The image has no entrypoint, so the command starts the server itself.
     image: vllm/vllm-omni:v0.30.0@sha256:fc77cfaac7b1b43c30cbf32eaea214864434c6e0f303e6e9eb9f64104241a994
-    # --enable-sleep-mode lets the app free the GPU between jobs (see
-    # VOXTRAL_IDLE_SLEEP_SECONDS in the README).
     command:
       - vllm
       - serve
@@ -57,7 +55,6 @@ services:
       - --omni
       - --port
       - "8091"
-      - --enable-sleep-mode
     ipc: host
     volumes:
       - hf_cache:/root/.cache/huggingface

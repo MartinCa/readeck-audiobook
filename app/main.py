@@ -12,7 +12,18 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import autogen, bookmarks, config, jobs, models, readeck, scheduler, sync, tts
+from app import (
+    autogen,
+    bookmarks,
+    config,
+    jobs,
+    models,
+    readeck,
+    scheduler,
+    sync,
+    tts,
+    voxtral_host,
+)
 from app.schemas import (
     AutoExclusionUpdate,
     AutoGenerationStatus,
@@ -31,6 +42,7 @@ from app.schemas import (
     SettingsUpdate,
     SyncStatus,
     TtsStatus,
+    VoxtralStatus,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -82,12 +94,14 @@ async def lifespan(app: FastAPI):
     # Catch up with whatever changed in Readeck while the app was down.
     sync.start_background()
     scheduler.start([sync.schedule, autogen.schedule])
+    await voxtral_host.adopt()
     try:
         yield
     finally:
         await scheduler.stop()
         await sync.stop()
         await jobs.stop_worker()
+        await voxtral_host.shutdown()
         await readeck.close_client()
         # After the workers are done, so nothing is mid-synthesis. Tearing an
         # onnxruntime CUDA session down at interpreter exit instead is a known
@@ -379,6 +393,11 @@ async def _settings_response() -> Settings:
             voxtral_voices=list(tts.VOXTRAL_ENGLISH_VOICES),
         ),
     )
+
+
+@app.get("/api/voxtral/status", response_model=VoxtralStatus)
+async def voxtral_status():
+    return VoxtralStatus(**await voxtral_host.status())
 
 
 @app.get("/api/settings", response_model=Settings)

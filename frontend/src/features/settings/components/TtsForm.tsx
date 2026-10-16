@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { VoxtralStatusPanel } from "@/features/settings/components/VoxtralStatusPanel";
 import { useSaveSettings } from "@/features/settings/hooks";
 import { notifications } from "@/lib/notifications";
 import type { TtsStatus } from "@/lib/types";
@@ -127,6 +128,7 @@ export function TtsForm({ status }: { status: TtsStatus }) {
               </p>
             )}
           </div>
+          {engine === "voxtral" && <VoxtralStatusPanel />}
           {engine === "kokoro" ? (
             <VoiceSelect
               id="kokoro-voice"

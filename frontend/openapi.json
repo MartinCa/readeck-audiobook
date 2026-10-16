@@ -990,6 +990,81 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "VoxtralStatus": {
+        "description": "The Voxtral server's container, as the app sees it.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "idleStopSeconds": {
+            "title": "Idlestopseconds",
+            "type": "integer"
+          },
+          "inUse": {
+            "title": "Inuse",
+            "type": "boolean"
+          },
+          "managed": {
+            "title": "Managed",
+            "type": "boolean"
+          },
+          "startTriggeredAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starttriggeredat"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "stopInSeconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stopinseconds"
+          }
+        },
+        "required": [
+          "managed",
+          "state",
+          "inUse",
+          "idleStopSeconds"
+        ],
+        "title": "VoxtralStatus",
+        "type": "object"
       }
     }
   },
@@ -1709,6 +1784,24 @@
           }
         },
         "summary": "Run Sync"
+      }
+    },
+    "/api/voxtral/status": {
+      "get": {
+        "operationId": "voxtral_status_api_voxtral_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoxtralStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Voxtral Status"
       }
     },
     "/health": {

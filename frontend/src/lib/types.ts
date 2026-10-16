@@ -18,4 +18,5 @@ export type SettingsUpdate = Schemas["SettingsUpdate"];
 export type GenerationSettings = Schemas["GenerationSettings"];
 export type AutoGenerationStatus = Schemas["AutoGenerationStatus"];
 export type TtsStatus = Schemas["TtsStatus"];
+export type VoxtralStatus = Schemas["VoxtralStatus"];
 export type SyncStatus = Schemas["SyncStatus"];

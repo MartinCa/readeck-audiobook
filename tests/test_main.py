@@ -450,6 +450,15 @@ async def test_delete_job_leaves_completed_audio_alone(client):
     assert await models.get_job(job["id"])
 
 
+async def test_voxtral_status_when_not_managed(client):
+    resp = await client.get("/api/voxtral/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["managed"] is False
+    assert body["state"] == "unmanaged"
+    assert body["idleStopSeconds"] == 300
+
+
 async def test_bulk_retry_jobs_requeues_only_failed_ones(client):
     failed = [await models.create_job(n, n, "http://x", "edge-tts", "v") for n in ("a", "b")]
     for job in failed:

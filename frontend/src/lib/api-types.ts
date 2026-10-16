@@ -274,6 +274,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/voxtral/status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Voxtral Status */
+    get: operations["voxtral_status_api_voxtral_status_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/health": {
     parameters: {
       query?: never;
@@ -622,6 +639,28 @@ export interface components {
       msg: string;
       /** Error Type */
       type: string;
+    };
+    /**
+     * VoxtralStatus
+     * @description The Voxtral server's container, as the app sees it.
+     */
+    VoxtralStatus: {
+      /** Detail */
+      detail?: string | null;
+      /** Idlestopseconds */
+      idleStopSeconds: number;
+      /** Inuse */
+      inUse: boolean;
+      /** Managed */
+      managed: boolean;
+      /** Starttriggeredat */
+      startTriggeredAt?: string | null;
+      /** Startedat */
+      startedAt?: string | null;
+      /** State */
+      state: string;
+      /** Stopinseconds */
+      stopInSeconds?: number | null;
     };
   };
   responses: never;
@@ -1164,6 +1203,26 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Settings"];
+        };
+      };
+    };
+  };
+  voxtral_status_api_voxtral_status_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VoxtralStatus"];
         };
       };
     };

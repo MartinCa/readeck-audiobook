@@ -50,3 +50,15 @@ export function useRunSync() {
     onSuccess: (data) => queryClient.setQueryData(settingsKey, data),
   });
 }
+
+const VOXTRAL_POLL_MS = 5000;
+
+/** The Voxtral container's state, followed while the Voice form shows it. */
+export function useVoxtralStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: ["voxtral-status"],
+    queryFn: settingsApi.voxtralStatus,
+    enabled,
+    refetchInterval: VOXTRAL_POLL_MS,
+  });
+}

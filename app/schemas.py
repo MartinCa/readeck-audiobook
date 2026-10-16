@@ -280,6 +280,19 @@ class TtsStatus(TtsSettings):
     voxtral_voices: list[str]
 
 
+class VoxtralStatus(ApiModel):
+    """The Voxtral server's container, as the app sees it."""
+
+    managed: bool  # the app starts and stops the container itself
+    state: str  # unmanaged, stopped, starting, running, stopping or error
+    detail: str | None = None
+    started_at: datetime | None = None  # when Docker last started the container
+    start_triggered_at: datetime | None = None  # set while a start this app asked for is under way
+    in_use: bool  # a job is using it, so it will not be stopped
+    stop_in_seconds: int | None = None  # until the idle stop, when one is pending
+    idle_stop_seconds: int  # the configured idle period
+
+
 class Settings(ApiModel):
     sync: SyncStatus
     auto_generation: AutoGenerationStatus

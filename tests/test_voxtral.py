@@ -1,7 +1,6 @@
 """Tests for the Voxtral engine in app.voxtral; the server is faked with httpx."""
 
 import array
-import asyncio
 import io
 import json
 import math
@@ -44,7 +43,6 @@ def server(monkeypatch):
     """
     monkeypatch.setattr(voxtral.config, "VOXTRAL_URL", "http://voxtral.test")
     monkeypatch.setattr(voxtral.config, "TTS_MAX_RETRIES", 1)  # no sleeping between retries
-    monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0)  # no sleep/wake calls
     state = type("FakeServer", (), {})()
     state.requests = []
     state.ffmpeg = []
@@ -292,89 +290,3 @@ class TestSynthesize:
 
 async def _noop():
     return None
-
-
-class TestIdleSleep:
-    @pytest.fixture(autouse=True)
-    def reset(self, monkeypatch):
-        monkeypatch.setattr(voxtral, "_users", 0)
-        monkeypatch.setattr(voxtral, "_sleep_timer", None)
-        monkeypatch.setattr(voxtral, "_sleep_task", None)
-        monkeypatch.setattr(voxtral, "_sleep_lock", None)
-
-    @staticmethod
-    def _controls(server):
-        calls = []
-        base = server.reply
-
-        def reply(request):
-            if "/v1/omni/" in str(request.url):
-                calls.append((request.url.path, json.loads(request.content)))
-                return httpx.Response(200, json={"status": "SUCCESS", "acks": []})
-            return base(request)
-
-        server.reply = reply
-        return calls
-
-    async def test_zero_makes_no_control_calls(self, tmp_path, server, monkeypatch):
-        calls = self._controls(server)
-        await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
-        assert calls == []
-        assert voxtral._sleep_timer is None
-
-    async def test_wakes_before_the_job_and_sleeps_after_the_idle_period(
-        self, tmp_path, server, monkeypatch
-    ):
-        monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0.05)
-        monkeypatch.setattr(voxtral.config, "VOXTRAL_SLEEP_LEVEL", 2)
-        calls = self._controls(server)
-        await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
-        assert [path for path, _ in calls] == ["/v1/omni/wakeup"]
-        assert calls[0][1] == {"stage_ids": [0, 1]}
-        await asyncio.sleep(0.3)
-        assert [path for path, _ in calls] == ["/v1/omni/wakeup", "/v1/omni/sleep"]
-        assert calls[1][1] == {"stage_ids": [0, 1], "level": 2}
-
-    async def test_a_new_job_cancels_the_pending_sleep(self, tmp_path, server, monkeypatch):
-        monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0.2)
-        calls = self._controls(server)
-        await voxtral.synthesize_voxtral("Hello.", tmp_path / "a.mp3")
-        await voxtral.synthesize_voxtral("Hello.", tmp_path / "b.mp3")
-        await asyncio.sleep(0.5)
-        assert [path for path, _ in calls].count("/v1/omni/sleep") == 1
-
-    async def test_falls_back_to_one_stage_at_a_time(self, tmp_path, server, monkeypatch):
-        monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0.05)
-        calls = []
-        base = server.reply
-
-        def reply(request):
-            if "/v1/omni/" in str(request.url):
-                body = json.loads(request.content)
-                calls.append((request.url.path, body["stage_ids"]))
-                # Stage 1 cannot sleep, so a call that includes it is refused.
-                if request.url.path.endswith("/sleep") and 1 in body["stage_ids"]:
-                    return httpx.Response(500, json={"detail": "no"})
-                return httpx.Response(200, json={"status": "SUCCESS", "acks": []})
-            return base(request)
-
-        server.reply = reply
-        await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
-        await asyncio.sleep(0.3)
-        assert [c for c in calls if c[0].endswith("/sleep")] == [
-            ("/v1/omni/sleep", [0, 1]),
-            ("/v1/omni/sleep", [0]),
-            ("/v1/omni/sleep", [1]),
-        ]
-
-    async def test_a_failing_control_call_does_not_fail_the_job(
-        self, tmp_path, server, monkeypatch
-    ):
-        monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0.05)
-        base = server.reply
-        server.reply = lambda r: (
-            httpx.Response(501, json={"detail": "no"}) if "/v1/omni/" in str(r.url) else base(r)
-        )
-        await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
-        await asyncio.sleep(0.2)
-        assert (tmp_path / "out.mp3").exists()

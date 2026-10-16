@@ -19,7 +19,7 @@ from pathlib import Path
 
 import httpx
 
-from app import audio, config, tts
+from app import audio, config, tts, voxtral_host
 
 logger = logging.getLogger(__name__)
 
@@ -29,99 +29,6 @@ SENTENCE_GAP_SECONDS = 0.3
 
 # Client errors that are worth retrying: request timeout and too many requests.
 RETRYABLE_STATUSES = {408, 429}
-
-
-# Idle sleep. The server's sleep mode gives the model's VRAM back while it keeps
-# running (it must be started with --enable-sleep-mode). Jobs hold the server
-# awake; once none is left, a timer puts it to sleep after the idle period.
-_users = 0
-_sleep_timer: asyncio.TimerHandle | None = None
-_sleep_task: asyncio.Task | None = None
-_sleep_lock: asyncio.Lock | None = None
-
-
-async def _control(action: str, body: dict) -> bool:
-    """POST to one of the server's /v1/omni controls. A failure is logged, never raised."""
-    try:
-        async with httpx.AsyncClient(timeout=config.VOXTRAL_TIMEOUT_SECONDS) as client:
-            response = await client.post(f"{config.VOXTRAL_URL}/v1/omni/{action}", json=body)
-        if response.status_code >= 400:
-            logger.warning(
-                "Voxtral %s returned %s: %s", action, response.status_code, response.text[:300]
-            )
-            return False
-    except httpx.HTTPError as exc:
-        logger.warning("Voxtral %s failed: %r", action, exc)
-        return False
-    return True
-
-
-async def _control_stages(action: str, extra: dict) -> bool:
-    """Run a sleep or wakeup control on every configured stage; True if any took.
-
-    All the stages go in one call. If the server refuses that (a stage that
-    cannot sleep, say), they are tried one by one, so the ones that can still do.
-    """
-    stages = config.VOXTRAL_SLEEP_STAGES
-    if await _control(action, {"stage_ids": stages, **extra}):
-        return True
-    if len(stages) < 2:
-        return False
-    results = [await _control(action, {"stage_ids": [stage], **extra}) for stage in stages]
-    return any(results)
-
-
-def _lock() -> asyncio.Lock:
-    global _sleep_lock
-    if _sleep_lock is None:
-        _sleep_lock = asyncio.Lock()
-    return _sleep_lock
-
-
-async def _wake() -> None:
-    """Make sure the server is awake. Waking one that is not asleep is a no-op there."""
-    async with _lock():
-        if await _control_stages("wakeup", {}):
-            logger.debug("Voxtral server awake")
-
-
-async def _sleep_if_idle() -> None:
-    global _sleep_task
-    async with _lock():
-        if _users > 0:
-            return
-        if await _control_stages("sleep", {"level": config.VOXTRAL_SLEEP_LEVEL}):
-            logger.info(
-                "Voxtral server asleep after %ss idle, releasing its GPU memory. "
-                "The next Voxtral job wakes it.",
-                config.VOXTRAL_IDLE_SLEEP_SECONDS,
-            )
-    _sleep_task = None
-
-
-def _start_sleep_task() -> None:
-    global _sleep_timer, _sleep_task
-    _sleep_timer = None
-    _sleep_task = asyncio.get_running_loop().create_task(_sleep_if_idle())
-
-
-async def _acquire_server() -> None:
-    global _users, _sleep_timer
-    _users += 1
-    if _sleep_timer is not None:
-        _sleep_timer.cancel()
-        _sleep_timer = None
-    if config.VOXTRAL_IDLE_SLEEP_SECONDS > 0:
-        await _wake()
-
-
-def _release_server() -> None:
-    global _users, _sleep_timer
-    _users -= 1
-    if _users == 0 and config.VOXTRAL_IDLE_SLEEP_SECONDS > 0:
-        _sleep_timer = asyncio.get_running_loop().call_later(
-            config.VOXTRAL_IDLE_SLEEP_SECONDS, _start_sleep_task
-        )
 
 
 @dataclass(frozen=True)
@@ -233,10 +140,10 @@ async def synthesize_voxtral(
 
     await tts._report_progress(on_progress, 0, len(chunks))
     try:
-        await _acquire_server()
+        await voxtral_host.acquire()
         await _synthesize(chunks, output_path, voice, on_progress)
     finally:
-        _release_server()
+        voxtral_host.release()
 
 
 async def _synthesize(
