@@ -57,13 +57,16 @@ def truncate(cleaned: str, max_chars: int) -> str:
     return pieces[0] if pieces else ""
 
 
-def encode_mp3(wav_path: Path, mp3_path: Path) -> None:
+def encode_mp3(wav_path: Path, mp3_path: Path, tempo: float = 1.0) -> None:
+    # atempo changes the speed without changing the pitch.
+    slow = ["-af", f"atempo={tempo}"] if tempo != 1.0 else []
     result = subprocess.run(
         [
             "ffmpeg",
             "-y",
             "-i",
             str(wav_path),
+            *slow,
             "-codec:a",
             "libmp3lame",
             "-qscale:a",
@@ -90,7 +93,13 @@ def run_edge(text: str, out: Path, voice: str) -> dict:
 
 
 def run_chatterbox(
-    text: str, out: Path, turbo: bool, ref_audio: str | None, chunk_chars: int
+    text: str,
+    out: Path,
+    turbo: bool,
+    ref_audio: str | None,
+    chunk_chars: int,
+    tempo: float = 1.0,
+    options: dict | None = None,
 ) -> dict:
     import numpy as np
     import soundfile as sf
@@ -102,7 +111,9 @@ def run_chatterbox(
         from chatterbox.tts import ChatterboxTTS as Model
 
     chunks = tts._split_text(text, chunk_chars)
-    kwargs = {"audio_prompt_path": ref_audio} if ref_audio else {}
+    kwargs = dict(options or {})
+    if ref_audio:
+        kwargs["audio_prompt_path"] = ref_audio
 
     started = time.perf_counter()
     model = Model.from_pretrained(device="cuda")
@@ -124,7 +135,7 @@ def run_chatterbox(
                 writer.write(wav.squeeze(0).detach().cpu().numpy().astype("float32"))
                 writer.write(gap)
         peak_vram_gb = torch.cuda.max_memory_allocated() / 1024**3
-        encode_mp3(wav_path, out)
+        encode_mp3(wav_path, out, tempo)
     finally:
         wav_path.unlink(missing_ok=True)
         del model
@@ -178,6 +189,22 @@ def main() -> int:
     )
     parser.add_argument("--ref-audio", help="reference clip for the Chatterbox engines")
     parser.add_argument(
+        "--tempo",
+        type=float,
+        default=1.0,
+        help="Chatterbox playback speed after synthesis, 0.5-2.0 (0.9 = 10%% slower, same pitch)",
+    )
+    parser.add_argument(
+        "--cfg-weight",
+        type=float,
+        help="original Chatterbox only (Turbo ignores it); upstream suggests ~0.3 for fast speech",
+    )
+    parser.add_argument(
+        "--exaggeration",
+        type=float,
+        help="original Chatterbox only (Turbo ignores it); higher tends to speak faster",
+    )
+    parser.add_argument(
         "--chatterbox-chunk-chars",
         type=int,
         default=400,
@@ -203,7 +230,17 @@ def main() -> int:
     results = {r["label"]: r for r in previous}
 
     jobs: list[tuple[str, callable]] = []
+    if not 0.5 <= args.tempo <= 2.0:
+        parser.error("--tempo must be between 0.5 and 2.0")
     ref_tag = "-cloned" if args.ref_audio else ""
+    # Tuned runs get their own label so they sit beside the defaults, not over them.
+    tempo_tag = f"-x{args.tempo:g}" if args.tempo != 1.0 else ""
+    original_options = {}
+    if args.cfg_weight is not None:
+        original_options["cfg_weight"] = args.cfg_weight
+    if args.exaggeration is not None:
+        original_options["exaggeration"] = args.exaggeration
+    cfg_tag = "".join(f"-{k.split('_')[0]}{v:g}" for k, v in original_options.items())
     for engine in engines:
         if engine == "kokoro":
             for voice in args.kokoro_voice or ["af_heart"]:
@@ -213,11 +250,13 @@ def main() -> int:
                 jobs.append((f"edge-{voice}", lambda out, v=voice: run_edge(text, out, v)))
         else:
             turbo = engine == "chatterbox-turbo"
+            options = {} if turbo else original_options
+            label = engine + ref_tag + ("" if turbo else cfg_tag) + tempo_tag
             jobs.append(
                 (
-                    engine + ref_tag,
-                    lambda out, t=turbo: run_chatterbox(
-                        text, out, t, args.ref_audio, args.chatterbox_chunk_chars
+                    label,
+                    lambda out, t=turbo, o=options: run_chatterbox(
+                        text, out, t, args.ref_audio, args.chatterbox_chunk_chars, args.tempo, o
                     ),
                 )
             )
