@@ -44,6 +44,7 @@ def server(monkeypatch):
     """
     monkeypatch.setattr(voxtral.config, "VOXTRAL_URL", "http://voxtral.test")
     monkeypatch.setattr(voxtral.config, "TTS_MAX_RETRIES", 1)  # no sleeping between retries
+    monkeypatch.setattr(voxtral.config, "VOXTRAL_IDLE_SLEEP_SECONDS", 0)  # no sleep/wake calls
     state = type("FakeServer", (), {})()
     state.requests = []
     state.ffmpeg = []
@@ -315,7 +316,7 @@ class TestIdleSleep:
         server.reply = reply
         return calls
 
-    async def test_off_by_default_makes_no_control_calls(self, tmp_path, server, monkeypatch):
+    async def test_zero_makes_no_control_calls(self, tmp_path, server, monkeypatch):
         calls = self._controls(server)
         await voxtral.synthesize_voxtral("Hello.", tmp_path / "out.mp3")
         assert calls == []

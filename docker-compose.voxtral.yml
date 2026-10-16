@@ -48,9 +48,16 @@ services:
   voxtral:
     # The image has no entrypoint, so the command starts the server itself.
     image: vllm/vllm-omni:v0.30.0
-    # To free the GPU between jobs, add "--enable-sleep-mode" here and set
-    # VOXTRAL_IDLE_SLEEP_SECONDS on the app (see the README).
-    command: ["vllm", "serve", "mistralai/Voxtral-4B-TTS-2603", "--omni", "--port", "8091"]
+    # --enable-sleep-mode lets the app free the GPU between jobs (see
+    # VOXTRAL_IDLE_SLEEP_SECONDS in the README).
+    command:
+      - vllm
+      - serve
+      - mistralai/Voxtral-4B-TTS-2603
+      - --omni
+      - --port
+      - "8091"
+      - --enable-sleep-mode
     ipc: host
     volumes:
       - hf_cache:/root/.cache/huggingface
