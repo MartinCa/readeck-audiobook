@@ -38,6 +38,7 @@ import json
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -242,6 +243,7 @@ def main() -> int:
         except Exception as exc:  # one engine failing must not stop the others
             results[label] = {"label": label, "error": f"{type(exc).__name__}: {exc}"}
             print(f"  FAILED: {type(exc).__name__}: {exc}")
+            traceback.print_exc()
 
     ordered = list(results.values())
     results_path.write_text(json.dumps(ordered, indent=2))

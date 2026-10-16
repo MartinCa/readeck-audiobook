@@ -41,6 +41,12 @@ RUN curl -fsSL -o /tmp/kokoro.tar.bz2 \
 RUN uv venv --python 3.11 /opt/chatterbox && \
     VIRTUAL_ENV=/opt/chatterbox uv pip install chatterbox-tts soundfile mutagen edge-tts
 
+# Chatterbox's watermarker (resemble-perth) imports pkg_resources, which setuptools
+# 81+ no longer ships and uv venvs do not include. Without it perth silently sets
+# PerthImplicitWatermarker to None and Chatterbox dies with "'NoneType' object is
+# not callable". Its own layer so adding it does not redo the torch install above.
+RUN VIRTUAL_ENV=/opt/chatterbox uv pip install "setuptools<81"
+
 COPY app/ ./app/
 COPY scripts/compare_tts.py scripts/compare_all.sh ./scripts/
 
