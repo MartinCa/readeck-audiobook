@@ -261,6 +261,7 @@ def run_voxtral(
     chunk_chars: int,
     level_db: float | None = None,
     gap_seconds: float = 0.35,
+    max_new_tokens: int | None = None,
 ) -> dict:
     """Synthesize through a vLLM-Omni server's OpenAI-style /v1/audio/speech route."""
     try:
@@ -278,15 +279,16 @@ def run_voxtral(
         writer = None
         for index, chunk in enumerate(chunks, 1):
             print(f"    chunk {index}/{len(chunks)}", flush=True)
-            body = json.dumps(
-                {
-                    "model": VOXTRAL_MODEL,
-                    "input": chunk,
-                    "voice": voice,
-                    "language": "English",
-                    "response_format": "wav",
-                }
-            ).encode()
+            payload = {
+                "model": VOXTRAL_MODEL,
+                "input": chunk,
+                "voice": voice,
+                "language": "English",
+                "response_format": "wav",
+            }
+            if max_new_tokens is not None:
+                payload["max_new_tokens"] = max_new_tokens
+            body = json.dumps(payload).encode()
             request = urllib.request.Request(
                 f"{url}/v1/audio/speech", body, {"Content-Type": "application/json"}
             )
@@ -387,12 +389,18 @@ def main() -> int:
         "--voxtral-chunk-chars",
         type=int,
         default=500,
-        help="text per Voxtral request (default 500, the length the model card benchmarks)",
+        help="text per Voxtral request (default 500, the model card's benchmark length; "
+        "Mistral advises under 300 words, about 1800 characters)",
     )
     parser.add_argument(
         "--voxtral-level",
         type=float,
         help="scale every Voxtral chunk to this RMS in dBFS (e.g. -20) to even out volume drift",
+    )
+    parser.add_argument(
+        "--voxtral-max-tokens",
+        type=int,
+        help="max_new_tokens per Voxtral request (server default 2048); raise it for long chunks",
     )
     parser.add_argument(
         "--voxtral-gap",
@@ -475,6 +483,7 @@ def main() -> int:
                             args.voxtral_chunk_chars,
                             args.voxtral_level,
                             args.voxtral_gap,
+                            args.voxtral_max_tokens,
                         ),
                     )
                 )
