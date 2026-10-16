@@ -13,7 +13,7 @@
 # The Voxtral weights are licensed CC BY-NC 4.0: non-commercial use only.
 services:
   readeck-audiobook:
-    image: ${READECK_AUDIOBOOK_IMAGE:-ghcr.io/martinca/readeck-audiobook:latest}
+    image: ${READECK_AUDIOBOOK_IMAGE:-ghcr.io/martinca/readeck-audiobook:latest@sha256:b5526bfa2a4b3f64f0b4255bbb8ad987088141d0122361b5069aa109cb258567}
     ports:
       - "8080:8080"
     environment:
@@ -47,7 +47,7 @@ services:
 
   voxtral:
     # The image has no entrypoint, so the command starts the server itself.
-    image: vllm/vllm-omni:v0.30.0
+    image: vllm/vllm-omni:v0.30.0@sha256:fc77cfaac7b1b43c30cbf32eaea214864434c6e0f303e6e9eb9f64104241a994
     # --enable-sleep-mode lets the app free the GPU between jobs (see
     # VOXTRAL_IDLE_SLEEP_SECONDS in the README).
     command:
