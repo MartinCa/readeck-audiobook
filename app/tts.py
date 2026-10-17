@@ -109,6 +109,11 @@ def _pick_voice(lang: str, english_voice: str | None = None) -> str:
     return LANG_VOICE_MAP.get(base, DEFAULT_VOICE)
 
 
+# Unknown engine names already reported, so a setting left over from a removed
+# engine is mentioned once rather than on every job.
+_unknown_engines_reported: set[str] = set()
+
+
 def resolve_engine_and_voice(
     lang: str,
     engine: str | None = None,
@@ -124,6 +129,13 @@ def resolve_engine_and_voice(
     """
     base = (lang or "").split("-")[0].lower()
     wanted = engine or config.TTS_ENGINE
+    if wanted not in {ENGINE_EDGE, ENGINE_KOKORO} and wanted not in _unknown_engines_reported:
+        _unknown_engines_reported.add(wanted)
+        logger.warning(
+            "TTS engine %r no longer exists, so edge-tts is used instead; "
+            "pick an engine under Settings → Voice",
+            wanted,
+        )
     if wanted == ENGINE_KOKORO and base in KOKORO_SUPPORTED_LANGS:
         return ENGINE_KOKORO, kokoro_voice or config.KOKORO_VOICE
     return ENGINE_EDGE, _pick_voice(lang, edge_voice)

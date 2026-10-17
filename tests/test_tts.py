@@ -103,6 +103,21 @@ class TestResolveRemovedEngine:
         """Voxtral was removed; a setting saved while it existed must not break queueing."""
         assert tts.resolve_engine_and_voice("en", "voxtral") == ("edge-tts", "en-US-AriaNeural")
 
+    def test_the_fallback_is_reported_once(self, monkeypatch, caplog):
+        monkeypatch.setattr(tts, "_unknown_engines_reported", set())
+        with caplog.at_level("WARNING", logger="app.tts"):
+            tts.resolve_engine_and_voice("en", "voxtral")
+            tts.resolve_engine_and_voice("de", "voxtral")
+        assert caplog.text.count("no longer exists") == 1
+        assert "'voxtral'" in caplog.text
+
+    def test_a_known_engine_is_not_reported(self, monkeypatch, caplog):
+        monkeypatch.setattr(tts, "_unknown_engines_reported", set())
+        with caplog.at_level("WARNING", logger="app.tts"):
+            tts.resolve_engine_and_voice("en", "kokoro")
+            tts.resolve_engine_and_voice("en", "edge-tts")
+        assert caplog.text == ""
+
 
 class TestResolveKokoroSid:
     """sherpa-onnx picks a speaker by integer id, so KOKORO_VOICE names are mapped."""
@@ -665,6 +680,15 @@ class TestGenerateAudio:
     ):
         monkeypatch.setattr(tts.config, "TTS_ENGINE", "edge-tts")
         await tts.generate_audio("job1", "Hallo Welt", lang="de")
+        assert fake_backends["edge"]["voice"] == "de-DE-KatjaNeural"
+
+    async def test_an_empty_engine_on_a_job_is_resolved_not_rejected(
+        self, audio_dir, fake_backends, monkeypatch
+    ):
+        monkeypatch.setattr(tts.config, "TTS_ENGINE", "edge-tts")
+        await tts.generate_audio(
+            "job1", "Hallo Welt", engine="", voice="de-DE-KatjaNeural", lang="de"
+        )
         assert fake_backends["edge"]["voice"] == "de-DE-KatjaNeural"
 
     async def test_file_is_named_after_the_article(self, audio_dir, fake_backends):
