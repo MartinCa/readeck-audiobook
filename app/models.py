@@ -1,5 +1,5 @@
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -503,31 +503,46 @@ async def delete_failed_jobs(bookmark_ids: list[str]) -> int:
     return deleted
 
 
-async def retry_job(job_id: str) -> dict | None:
-    """Send a failed job back to the queue with a fresh attempt budget."""
-    async with _connect() as db:
-        async with db.execute(
-            "UPDATE jobs SET status = ?, error_msg = NULL, attempts = 0, updated_at = ? "
-            "WHERE id = ? AND status = ? RETURNING *",
-            (JobStatus.pending, _now(), job_id, JobStatus.failed),
-        ) as cur:
-            row = await cur.fetchone()
-    return dict(row) if row else None
+# Picks the engine and voice a retried job will use from its language.
+EngineResolver = Callable[[str], tuple[str, str]]
 
 
-async def retry_jobs(job_ids: list[str]) -> int:
-    """Send the failed jobs among `job_ids` back to the queue; returns how many were."""
-    retried = 0
+async def retry_jobs(job_ids: list[str], resolve: EngineResolver | None = None) -> list[dict]:
+    """Send the failed jobs among `job_ids` back to the queue; returns those rows.
+
+    Each gets a fresh attempt budget. With `resolve`, it also takes the engine
+    and voice the settings choose now (for its language) in place of the ones it
+    was queued with: a job that failed because its engine is gone or broken would
+    otherwise fail the same way again.
+    """
+    retried: list[dict] = []
     async with _connect() as db:
         for chunk in _chunks(list(dict.fromkeys(job_ids))):
             placeholders = ", ".join("?" * len(chunk))
             async with db.execute(
-                "UPDATE jobs SET status = ?, error_msg = NULL, attempts = 0, updated_at = ? "
-                f"WHERE id IN ({placeholders}) AND status = ? RETURNING id",
-                (JobStatus.pending, _now(), *chunk, JobStatus.failed),
+                f"SELECT id, lang FROM jobs WHERE id IN ({placeholders}) AND status = ?",
+                (*chunk, JobStatus.failed),
             ) as cur:
-                retried += len(await cur.fetchall())
+                failed = [(row["id"], row["lang"] or "") for row in await cur.fetchall()]
+            for job_id, lang in failed:
+                assignment, extra = "", ()
+                if resolve:
+                    assignment, extra = ", tts_engine = ?, voice = ?", resolve(lang)
+                async with db.execute(
+                    "UPDATE jobs SET status = ?, error_msg = NULL, attempts = 0, "
+                    f"updated_at = ?{assignment} WHERE id = ? AND status = ? RETURNING *",
+                    (JobStatus.pending, _now(), *extra, job_id, JobStatus.failed),
+                ) as cur:
+                    row = await cur.fetchone()
+                if row:
+                    retried.append(dict(row))
     return retried
+
+
+async def retry_job(job_id: str, resolve: EngineResolver | None = None) -> dict | None:
+    """Send one failed job back to the queue; see `retry_jobs`."""
+    rows = await retry_jobs([job_id], resolve)
+    return rows[0] if rows else None
 
 
 # ── Auto generation bookkeeping ────────────────────────────────────────────────

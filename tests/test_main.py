@@ -435,6 +435,28 @@ async def test_retry_failed_job(client):
     assert (await client.post(f"/api/jobs/{job['id']}/retry")).status_code == 404
 
 
+async def test_retry_takes_the_engine_and_voice_the_settings_choose_now(client):
+    # Queued for an engine that has since been switched off (no VOXTRAL_URL).
+    job = await models.create_job("a", "A", "http://x", "voxtral", "casual_female", lang="en")
+    other = await models.create_job("b", "B", "http://x", "voxtral", "casual_female", lang="da")
+    for j in (job, other):
+        await models.update_job(j["id"], status=models.JobStatus.failed, error_msg="x")
+    await models.set_settings({"tts_engine": "edge-tts", "edge_voice": "en-US-AndrewNeural"})
+
+    resp = await client.post(f"/api/jobs/{job['id']}/retry")
+    assert resp.status_code == 200
+    assert (resp.json()["ttsEngine"], resp.json()["voice"]) == ("edge-tts", "en-US-AndrewNeural")
+
+    # In bulk too, and each job gets the voice for its own language.
+    await models.update_job(job["id"], status=models.JobStatus.failed, error_msg="x")
+    resp = await client.post("/api/jobs/bulk-retry", json={"jobIds": [job["id"], other["id"]]})
+    assert resp.json() == {"count": 2}
+    first, second = await models.get_job(job["id"]), await models.get_job(other["id"])
+    assert (first["tts_engine"], first["voice"]) == ("edge-tts", "en-US-AndrewNeural")
+    assert second["tts_engine"] == "edge-tts"
+    assert second["voice"] == tts.LANG_VOICE_MAP["da"]
+
+
 async def test_delete_job(client):
     job = await models.create_job("bm1", "Test", "http://x", "edge-tts", "v")
     resp = await client.delete(f"/api/jobs/{job['id']}")
