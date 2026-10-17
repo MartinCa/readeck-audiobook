@@ -54,6 +54,18 @@ async def load_tts_settings() -> TtsSettings:
     )
 
 
+async def current_engine_resolver() -> models.EngineResolver:
+    """Resolves (engine, voice) for a language from the settings as they are now."""
+    chosen = await load_tts_settings()
+
+    def resolve(lang: str) -> tuple[str, str]:
+        return tts.resolve_engine_and_voice(
+            lang, chosen.engine, chosen.kokoro_voice, chosen.edge_voice, chosen.voxtral_voice
+        )
+
+    return resolve
+
+
 async def save_tts_settings(current: TtsSettings) -> None:
     await models.set_settings(
         {

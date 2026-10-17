@@ -312,7 +312,9 @@ async def get_job(job_id: str):
 
 @app.post("/api/jobs/{job_id}/retry", response_model=Job)
 async def retry_job(job_id: str):
-    job = await models.retry_job(job_id)
+    # Back in the queue with the engine and voice the settings choose now, not
+    # the ones it was queued with (which may be what it failed on).
+    job = await models.retry_job(job_id, await jobs.current_engine_resolver())
     if not job:
         raise HTTPException(status_code=404, detail="No failed job with that id")
     return Job.from_row(job)
@@ -322,7 +324,8 @@ async def retry_job(job_id: str):
 async def bulk_retry_jobs(body: JobIds):
     # Only failed jobs go back to the queue; anything else in the selection is
     # already queued, running, or finished.
-    return CountResult(count=await models.retry_jobs(body.job_ids))
+    retried = await models.retry_jobs(body.job_ids, await jobs.current_engine_resolver())
+    return CountResult(count=len(retried))
 
 
 @app.delete("/api/jobs/{job_id}", status_code=204)
