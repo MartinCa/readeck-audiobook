@@ -13,7 +13,7 @@
 # The Voxtral weights are licensed CC BY-NC 4.0: non-commercial use only.
 services:
   readeck-audiobook:
-    image: ${READECK_AUDIOBOOK_IMAGE:-ghcr.io/martinca/readeck-audiobook:latest@sha256:b5526bfa2a4b3f64f0b4255bbb8ad987088141d0122361b5069aa109cb258567}
+    image: ${READECK_AUDIOBOOK_IMAGE:-ghcr.io/martinca/readeck-audiobook:latest@sha256:341f1bd6da088d43a122f29583c6c54f8779adc764c1e230325ddc8efbbfcafd}
     ports:
       - "8080:8080"
     environment:
