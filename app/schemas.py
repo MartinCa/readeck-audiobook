@@ -268,7 +268,6 @@ class TtsSettings(ApiModel):
     # Used for English articles; other languages keep their per-language voice.
     kokoro_voice: str
     edge_voice: str
-    voxtral_voice: str
 
 
 class TtsStatus(TtsSettings):
@@ -277,7 +276,6 @@ class TtsStatus(TtsSettings):
     engines: list[str]
     kokoro_voices: list[str]
     edge_voices: list[str]
-    voxtral_voices: list[str]
 
 
 class Settings(ApiModel):

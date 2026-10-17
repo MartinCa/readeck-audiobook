@@ -16,7 +16,6 @@ import type { TtsStatus } from "@/lib/types";
 const engineNames: Record<string, string> = {
   "edge-tts": "edge-tts (Microsoft online)",
   kokoro: "Kokoro (local)",
-  voxtral: "Voxtral (local server)",
 };
 
 // One line on what each engine is, shown under the choice.
@@ -24,14 +23,11 @@ const engineNotes: Record<string, string> = {
   "edge-tts":
     "Microsoft's cloud voices over an unofficial endpoint: your article text is sent to Microsoft, and it can break without notice.",
   kokoro: "Small model on your own machine. Fast, and nothing leaves the server.",
-  voxtral:
-    "Mistral's Voxtral on your own GPU, through a vLLM server. More natural, slower, and the weights are licensed for non-commercial use (CC BY-NC 4.0).",
 };
 
 // What a deployment needs before an engine is offered. edge-tts is always there.
 const engineRequirements: Record<string, string> = {
   kokoro: "Kokoro needs the Kokoro image",
-  voxtral: "Voxtral needs a server (set VOXTRAL_URL)",
 };
 
 const toItems = (values: string[], labels: Record<string, string> = {}) =>
@@ -75,14 +71,13 @@ export function TtsForm({ status }: { status: TtsStatus }) {
   const [engine, setEngine] = useState(status.engine);
   const [kokoroVoice, setKokoroVoice] = useState(status.kokoroVoice);
   const [edgeVoice, setEdgeVoice] = useState(status.edgeVoice);
-  const [voxtralVoice, setVoxtralVoice] = useState(status.voxtralVoice);
   const engineItems = toItems(status.engines, engineNames);
   const unavailable = Object.keys(engineRequirements).filter((e) => !status.engines.includes(e));
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     save.mutate(
-      { tts: { engine, kokoroVoice, edgeVoice, voxtralVoice } },
+      { tts: { engine, kokoroVoice, edgeVoice } },
       {
         onSuccess: () => notifications.success("Settings saved"),
         onError: (error) =>
@@ -134,14 +129,6 @@ export function TtsForm({ status }: { status: TtsStatus }) {
               value={kokoroVoice}
               values={status.kokoroVoices}
               onChange={setKokoroVoice}
-            />
-          ) : engine === "voxtral" ? (
-            <VoiceSelect
-              id="voxtral-voice"
-              label="Voxtral voice"
-              value={voxtralVoice}
-              values={status.voxtralVoices}
-              onChange={setVoxtralVoice}
             />
           ) : (
             <VoiceSelect

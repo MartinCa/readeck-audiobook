@@ -435,6 +435,28 @@ async def test_retry_failed_job(client):
     assert (await client.post(f"/api/jobs/{job['id']}/retry")).status_code == 404
 
 
+async def test_retry_takes_the_engine_and_voice_the_settings_choose_now(client):
+    # Queued for an engine that no longer exists.
+    job = await models.create_job("a", "A", "http://x", "voxtral", "casual_female", lang="en")
+    other = await models.create_job("b", "B", "http://x", "voxtral", "casual_female", lang="da")
+    for j in (job, other):
+        await models.update_job(j["id"], status=models.JobStatus.failed, error_msg="x")
+    await models.set_settings({"tts_engine": "edge-tts", "edge_voice": "en-US-AndrewNeural"})
+
+    resp = await client.post(f"/api/jobs/{job['id']}/retry")
+    assert resp.status_code == 200
+    assert (resp.json()["ttsEngine"], resp.json()["voice"]) == ("edge-tts", "en-US-AndrewNeural")
+
+    # In bulk too, and each job gets the voice for its own language.
+    await models.update_job(job["id"], status=models.JobStatus.failed, error_msg="x")
+    resp = await client.post("/api/jobs/bulk-retry", json={"jobIds": [job["id"], other["id"]]})
+    assert resp.json() == {"count": 2}
+    first, second = await models.get_job(job["id"]), await models.get_job(other["id"])
+    assert (first["tts_engine"], first["voice"]) == ("edge-tts", "en-US-AndrewNeural")
+    assert second["tts_engine"] == "edge-tts"
+    assert second["voice"] == tts.LANG_VOICE_MAP["da"]
+
+
 async def test_delete_job(client):
     job = await models.create_job("bm1", "Test", "http://x", "edge-tts", "v")
     resp = await client.delete(f"/api/jobs/{job['id']}")
@@ -788,18 +810,14 @@ async def test_health_stays_open_for_container_healthchecks(client, with_auth):
 
 async def test_tts_settings_default_to_the_environment_and_can_be_changed(client, monkeypatch):
     monkeypatch.setattr(tts, "kokoro_available", lambda: True)
-    monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
     body = (await client.get("/api/settings")).json()["tts"]
     assert body["engine"] == "edge-tts"
-    assert body["engines"] == ["edge-tts", "kokoro", "voxtral"]
+    assert body["engines"] == ["edge-tts", "kokoro"]
     assert "af_heart" in body["kokoroVoices"]
-    assert "casual_female" in body["voxtralVoices"]
-    assert body["voxtralVoice"] == "casual_female"
     choice = {
-        "engine": "voxtral",
+        "engine": "kokoro",
         "kokoroVoice": "bf_emma",
         "edgeVoice": "en-GB-SoniaNeural",
-        "voxtralVoice": "neutral_male",
     }
     resp = await client.put("/api/settings", json={"tts": choice})
     assert resp.status_code == 200
@@ -807,30 +825,17 @@ async def test_tts_settings_default_to_the_environment_and_can_be_changed(client
     assert {k: saved[k] for k in choice} == choice
 
 
-async def test_tts_settings_only_offer_voxtral_when_a_server_is_configured(client, monkeypatch):
-    monkeypatch.setattr(tts.config, "VOXTRAL_URL", "")
-    assert "voxtral" not in (await client.get("/api/settings")).json()["tts"]["engines"]
-
-
 async def test_tts_settings_reject_an_unavailable_engine_or_unknown_voice(client, monkeypatch):
     monkeypatch.setattr(tts, "kokoro_available", lambda: False)
     resp = await client.put(
         "/api/settings",
-        json={
-            "tts": {
-                "engine": "kokoro",
-                "kokoroVoice": "nope",
-                "edgeVoice": "en-US-AriaNeural",
-                "voxtralVoice": "de_female",
-            }
-        },
+        json={"tts": {"engine": "kokoro", "kokoroVoice": "nope", "edgeVoice": "en-US-AriaNeural"}},
     )
     assert resp.status_code == 422
-    assert set(resp.json()["errors"]) == {"tts.engine", "tts.kokoroVoice", "tts.voxtralVoice"}
+    assert set(resp.json()["errors"]) == {"tts.engine", "tts.kokoroVoice"}
 
 
-async def test_voxtral_cannot_be_chosen_without_a_server(client, monkeypatch):
-    monkeypatch.setattr(tts.config, "VOXTRAL_URL", "")
+async def test_an_engine_that_was_removed_cannot_be_chosen(client):
     resp = await client.put(
         "/api/settings",
         json={
@@ -838,7 +843,6 @@ async def test_voxtral_cannot_be_chosen_without_a_server(client, monkeypatch):
                 "engine": "voxtral",
                 "kokoroVoice": "af_heart",
                 "edgeVoice": "en-US-AriaNeural",
-                "voxtralVoice": "casual_female",
             }
         },
     )

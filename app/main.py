@@ -298,7 +298,9 @@ async def get_job(job_id: str):
 
 @app.post("/api/jobs/{job_id}/retry", response_model=Job)
 async def retry_job(job_id: str):
-    job = await models.retry_job(job_id)
+    # Back in the queue with the engine and voice the settings choose now, not
+    # the ones it was queued with (which may be what it failed on).
+    job = await models.retry_job(job_id, await jobs.current_engine_resolver())
     if not job:
         raise HTTPException(status_code=404, detail="No failed job with that id")
     return Job.from_row(job)
@@ -308,7 +310,8 @@ async def retry_job(job_id: str):
 async def bulk_retry_jobs(body: JobIds):
     # Only failed jobs go back to the queue; anything else in the selection is
     # already queued, running, or finished.
-    return CountResult(count=await models.retry_jobs(body.job_ids))
+    retried = await models.retry_jobs(body.job_ids, await jobs.current_engine_resolver())
+    return CountResult(count=len(retried))
 
 
 @app.delete("/api/jobs/{job_id}", status_code=204)
@@ -372,11 +375,9 @@ async def _settings_response() -> Settings:
             engine=chosen.engine,
             kokoro_voice=chosen.kokoro_voice,
             edge_voice=chosen.edge_voice,
-            voxtral_voice=chosen.voxtral_voice,
             engines=tts.available_engines(),
             kokoro_voices=tts.kokoro_english_voices(),
             edge_voices=list(tts.EDGE_ENGLISH_VOICES),
-            voxtral_voices=list(tts.VOXTRAL_ENGLISH_VOICES),
         ),
     )
 
@@ -403,8 +404,6 @@ async def update_settings(body: SettingsUpdate):
             errors["tts.kokoroVoice"] = ["Not a known English Kokoro voice"]
         if choice.edge_voice not in tts.EDGE_ENGLISH_VOICES:
             errors["tts.edgeVoice"] = ["Not an offered edge-tts voice"]
-        if choice.voxtral_voice not in tts.VOXTRAL_ENGLISH_VOICES:
-            errors["tts.voxtralVoice"] = ["Not an offered Voxtral voice"]
     if errors:
         return problem(422, "Validation failed", "Some settings are not valid.", errors)
     if sync_cron is not None:
@@ -417,9 +416,7 @@ async def update_settings(body: SettingsUpdate):
         await jobs.save_min_article_words(body.generation.min_article_words)
     if choice is not None:
         await jobs.save_tts_settings(
-            jobs.TtsSettings(
-                choice.engine, choice.kokoro_voice, choice.edge_voice, choice.voxtral_voice
-            )
+            jobs.TtsSettings(choice.engine, choice.kokoro_voice, choice.edge_voice)
         )
     return await _settings_response()
 
