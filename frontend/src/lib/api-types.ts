@@ -585,8 +585,6 @@ export interface components {
       engine: string;
       /** Kokorovoice */
       kokoroVoice: string;
-      /** Voxtralvoice */
-      voxtralVoice: string;
     };
     /**
      * TtsStatus
@@ -605,10 +603,6 @@ export interface components {
       kokoroVoice: string;
       /** Kokorovoices */
       kokoroVoices: string[];
-      /** Voxtralvoice */
-      voxtralVoice: string;
-      /** Voxtralvoices */
-      voxtralVoices: string[];
     };
     /** ValidationError */
     ValidationError: {

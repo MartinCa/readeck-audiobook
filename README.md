@@ -18,7 +18,6 @@ Browse your Readeck library, select articles, queue them for audio generation, a
 - Three TTS backends, chosen under Settings → Voice:
   - **edge-tts** (default) — Microsoft neural voices, no API key, ~200 MB Docker image. A cloud service: your article text is sent to Microsoft
   - **kokoro** (optional) — small local neural model, runs in-process, no API key, English only for now
-  - **voxtral** (optional) — Mistral's Voxtral TTS on your own GPU through a vLLM server, English only for now
 - Automatic language detection: voice is chosen based on the bookmark's `lang` field
 - Readable filenames and ID3 tags — files land as `how-to-build-a-thing-a1b2c3d4.mp3`, tagged with the article title
 - Long articles are synthesised in chunks, with retries, so a dropped connection doesn't waste the whole run
@@ -67,19 +66,10 @@ All settings are passed as environment variables (or via `.env`).
 |---|---|---|---|
 | `READECK_BASE_URL` | Yes | — | Readeck instance URL, e.g. `https://readeck.example.com` |
 | `READECK_API_TOKEN` | Yes | — | Readeck Bearer API token |
-| `TTS_ENGINE` | No | `edge-tts` | Default engine, `edge-tts`, `kokoro` or `voxtral`; changeable under Settings → Voice |
+| `TTS_ENGINE` | No | `edge-tts` | Default engine, `edge-tts` or `kokoro`; changeable under Settings → Voice |
 | `EDGE_TTS_VOICE` | No | `en-US-AriaNeural` | Default voice when language cannot be detected |
 | `KOKORO_VOICE` | No | `af_heart` | Default Kokoro voice; changeable under Settings → Voice |
 | `KOKORO_IDLE_UNLOAD_SECONDS` | No | `300` | Unload the Kokoro model after this long without a job; `0` keeps it loaded |
-| `VOXTRAL_URL` | No | — | Base URL of the vLLM-Omni server running Voxtral, e.g. `http://voxtral:8091`; setting it makes the engine available |
-| `VOXTRAL_VOICE` | No | `casual_female` | Default Voxtral voice; changeable under Settings → Voice |
-| `VOXTRAL_CHUNK_CHARS` | No | `1800` | Characters per Voxtral request; see the Voxtral section |
-| `VOXTRAL_MAX_NEW_TOKENS` | No | `4096` | Cap on the audio generated per request (the server's own default is 2048) |
-| `VOXTRAL_TARGET_DB` | No | `-20` | Level each chunk of speech is brought to, in dBFS; `off` disables levelling. A value that is not a number is logged and the default kept |
-| `VOXTRAL_TIMEOUT_SECONDS` | No | `600` | How long to wait for one Voxtral request |
-| `VOXTRAL_IDLE_SLEEP_SECONDS` | No | `300` | Put the Voxtral server to sleep after this many idle seconds, freeing its GPU memory; `0` turns it off. Needs the server started with `--enable-sleep-mode`; see the Voxtral section |
-| `VOXTRAL_SLEEP_LEVEL` | No | `2` | `2` discards the weights (frees the most, reloads them from disk on wake); `1` moves them to host RAM (quicker wake) |
-| `VOXTRAL_SLEEP_STAGES` | No | `0,1` | Comma-separated vLLM-Omni stages to put to sleep (Voxtral has two: the language model and the audio decoder). If the server refuses them together, they are tried one at a time |
 | `MAX_CONCURRENT_JOBS` | No | `2` | Maximum simultaneous TTS jobs |
 | `DATA_DIR` | No | `/app/data` | Where the SQLite database lives |
 | `AUDIO_DIR` | No | `/app/audio` | Where generated MP3s are written |
@@ -114,30 +104,6 @@ The voice is automatically selected based on the bookmark's `lang` field:
 | `fi` | fi-FI-NooraNeural |
 
 Any unlisted language falls back to `EDGE_TTS_VOICE`. The engine and voice are resolved once, when the job is queued, and stored on the job — so the Jobs page always reports what actually ran.
-
-## Voxtral (optional, GPU)
-
-[Voxtral TTS](https://huggingface.co/mistralai/Voxtral-4B-TTS-2603) is a 4B-parameter model from Mistral with 20 preset voices. It sounds more natural than Kokoro, and it is slower and needs a GPU with 16 GB or more of memory. The model runs in its own vLLM-Omni server; the app only calls its HTTP API, so the normal app image is used and carries no GPU libraries.
-
-```sh
-docker compose -f docker-compose.voxtral.yml up -d
-```
-
-`docker-compose.voxtral.yml` starts both containers, downloads the model on first start (about 8 GB, several minutes) and holds the app back until the server is healthy. It needs the NVIDIA Container Toolkit. To run the server yourself, set `VOXTRAL_URL` to its address and pick the engine under Settings → Voice. The engine is only offered when `VOXTRAL_URL` is set.
-
-**The licence is non-commercial.** The model's weights are released under CC BY-NC 4.0, so this engine is for personal use.
-
-**Giving the GPU back when idle.** The server keeps the model in VRAM (about 14 GB) for as long as it runs. This is on by default (`VOXTRAL_IDLE_SLEEP_SECONDS=300`) and needs the server started with `--enable-sleep-mode`, which `docker-compose.voxtral.yml` does; for a server without the flag, set the variable to `0`. Once no Voxtral job has run for that many seconds the app calls the server's `/v1/omni/sleep`, and `/v1/omni/wakeup` before the next one. A failed sleep or wake call is logged and never fails a job. Try it by hand first: `curl -X POST $VOXTRAL_URL/v1/omni/sleep -H 'Content-Type: application/json' -d '{"stage_ids":[0,1],"level":2}'`, check `nvidia-smi`, then the same with `/v1/omni/wakeup` and `{"stage_ids":[0,1]}`.
-
-**The server takes most of the GPU.** vLLM reserves a large share of video memory for itself (a community recipe measured about 20 GiB at startup on a 24 GB card), so it will not share the GPU with the Kokoro CUDA image.
-
-**Why long chunks.** Every request to Voxtral is independent: the model carries no voice, pace or intonation from one to the next, and neither the open weights nor vLLM-Omni offer a mode that does (Mistral's hosted API has its own mechanism for long text, which does not apply here). Each chunk border is therefore an audible reset, and the only lever is to have fewer of them. The app sends up to `VOXTRAL_CHUNK_CHARS` (default 1800, in line with Mistral's advice of under 300 words per request) per request, cut at paragraph boundaries wherever it can, and only at sentence boundaries inside a paragraph too long to fit.
-
-**Smoothing the seams.** Voxtral's raw output is quiet (around -37 dBFS RMS) and each request fades a few dB towards its end. Before the chunks are joined, `app/audio.py` trims the silence the model leaves at each end, fades the cut edges over 10 ms, and moves the gain along a straight line in dB so the start and end of every chunk land on `VOXTRAL_TARGET_DB`. The pause between chunks is then set by the app: 0.6 s where the cut falls on a paragraph break, 0.3 s where it falls between sentences. Like Kokoro, the file ends with two seconds of silence.
-
-**If speech cuts off mid-sentence.** A request that hits `VOXTRAL_MAX_NEW_TOKENS` ends early. Raise it, or lower `VOXTRAL_CHUNK_CHARS`.
-
-**Voices.** The server also has presets for other languages (`de_female`, `fr_male`, …), but only English is wired up here, so other languages still go to edge-tts. The app offers the five English presets: `casual_female`, `casual_male`, `cheerful_female`, `neutral_female` and `neutral_male`.
 
 ## Readeck sync
 
@@ -228,8 +194,6 @@ readeck-audiobook/
 ├── app/
 │   ├── main.py        # FastAPI JSON API, middleware, lifespan, serves the web UI
 │   ├── config.py      # Environment-driven settings
-│   ├── audio.py       # Trims, fades and levels synthesized chunks so they join cleanly
-│   ├── voxtral.py     # Voxtral engine: splits text, calls the vLLM-Omni server, joins the audio
 │   ├── schemas.py     # API request/response models (camelCase on the wire)
 │   ├── bookmarks.py   # Bookmark listing and filters over the local copy
 │   ├── sync.py        # Keeps the local copy of Readeck current

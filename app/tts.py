@@ -69,15 +69,6 @@ KOKORO_LEXICONS = ("lexicon-us-en.txt", "lexicon-zh.txt")
 
 ENGINE_EDGE = "edge-tts"
 ENGINE_KOKORO = "kokoro"
-ENGINE_VOXTRAL = "voxtral"
-# Voxtral covers more languages, but only English is wired up here.
-VOXTRAL_SUPPORTED_LANGS = {"en"}
-# The server's English presets. Its other presets are language-prefixed
-# (de_female, fr_male, ...) and its list also holds "default", which is left out
-# because nothing says which language it speaks.
-VOXTRAL_ENGLISH_VOICES = (
-    "casual_female", "casual_male", "cheerful_female", "neutral_female", "neutral_male",
-)  # fmt: skip
 
 
 # English edge-tts voices offered in the settings. Other languages keep the
@@ -102,17 +93,10 @@ def kokoro_available() -> bool:
     )
 
 
-def voxtral_available() -> bool:
-    """Whether a Voxtral server is configured; the app does not probe it."""
-    return bool(config.VOXTRAL_URL)
-
-
 def available_engines() -> list[str]:
     engines = [ENGINE_EDGE]
     if kokoro_available():
         engines.append(ENGINE_KOKORO)
-    if voxtral_available():
-        engines.append(ENGINE_VOXTRAL)
     return engines
 
 
@@ -130,7 +114,6 @@ def resolve_engine_and_voice(
     engine: str | None = None,
     kokoro_voice: str | None = None,
     edge_voice: str | None = None,
-    voxtral_voice: str | None = None,
 ) -> tuple[str, str]:
     """Decide which engine and voice a job in `lang` will actually use.
 
@@ -143,10 +126,6 @@ def resolve_engine_and_voice(
     wanted = engine or config.TTS_ENGINE
     if wanted == ENGINE_KOKORO and base in KOKORO_SUPPORTED_LANGS:
         return ENGINE_KOKORO, kokoro_voice or config.KOKORO_VOICE
-    if wanted == ENGINE_VOXTRAL and base in VOXTRAL_SUPPORTED_LANGS:
-        if voxtral_available():
-            return ENGINE_VOXTRAL, voxtral_voice or config.VOXTRAL_VOICE
-        logger.warning("Voxtral is the chosen engine but VOXTRAL_URL is not set; using edge-tts")
     return ENGINE_EDGE, _pick_voice(lang, edge_voice)
 
 
@@ -877,12 +856,12 @@ async def generate_audio(
     try:
         if engine == ENGINE_KOKORO:
             await synthesize_kokoro(cleaned, partial_path, voice, on_progress)
-        elif engine == ENGINE_VOXTRAL:
-            from app import voxtral  # imports this module, so not at the top
-
-            await voxtral.synthesize_voxtral(cleaned, partial_path, voice, on_progress)
-        else:
+        elif engine == ENGINE_EDGE:
             await synthesize_edge_tts(cleaned, partial_path, voice, on_progress)
+        else:
+            # An engine that no longer exists, stored on a job queued before it
+            # was removed. Retrying the job picks the one the settings choose.
+            raise ValueError(f"Unknown TTS engine {engine!r}; retry the job to use the current one")
 
         if not partial_path.exists() or partial_path.stat().st_size == 0:
             raise RuntimeError(f"{engine} produced an empty audio file")

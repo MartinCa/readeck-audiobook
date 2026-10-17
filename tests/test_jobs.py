@@ -333,10 +333,7 @@ class TestQueueBookmarks:
     async def test_jobs_record_the_engine_and_voice_chosen_in_the_settings(
         self, monkeypatch, store_bookmarks
     ):
-        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
-        await jobs.save_tts_settings(
-            jobs.TtsSettings("voxtral", "af_heart", "en-US-AriaNeural", "neutral_female")
-        )
+        await jobs.save_tts_settings(jobs.TtsSettings("kokoro", "bf_emma", "en-US-AriaNeural"))
         await store_bookmarks(
             [
                 {"id": "en", "title": "E", "lang": "en", "created": "2026-01-01T00:00:00Z"},
@@ -346,8 +343,8 @@ class TestQueueBookmarks:
         await jobs.queue_bookmarks(["en", "da"])
         rows, _ = await models.list_jobs()
         rows = {j["bookmark_id"]: j for j in rows}
-        assert (rows["en"]["tts_engine"], rows["en"]["voice"]) == ("voxtral", "neutral_female")
-        # Voxtral is English only here, so other languages still go to edge-tts.
+        assert (rows["en"]["tts_engine"], rows["en"]["voice"]) == ("kokoro", "bf_emma")
+        # Kokoro is English only here, so other languages still go to edge-tts.
         assert (rows["da"]["tts_engine"], rows["da"]["voice"]) == (
             "edge-tts",
             "da-DK-ChristelNeural",

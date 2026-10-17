@@ -40,7 +40,6 @@ class TtsSettings:
     engine: str
     kokoro_voice: str
     edge_voice: str
-    voxtral_voice: str
 
 
 async def load_tts_settings() -> TtsSettings:
@@ -50,7 +49,6 @@ async def load_tts_settings() -> TtsSettings:
         engine=raw.get("tts_engine") or config.TTS_ENGINE,
         kokoro_voice=raw.get("kokoro_voice") or config.KOKORO_VOICE,
         edge_voice=raw.get("edge_voice") or tts.LANG_VOICE_MAP["en"],
-        voxtral_voice=raw.get("voxtral_voice") or config.VOXTRAL_VOICE,
     )
 
 
@@ -60,7 +58,7 @@ async def current_engine_resolver() -> models.EngineResolver:
 
     def resolve(lang: str) -> tuple[str, str]:
         return tts.resolve_engine_and_voice(
-            lang, chosen.engine, chosen.kokoro_voice, chosen.edge_voice, chosen.voxtral_voice
+            lang, chosen.engine, chosen.kokoro_voice, chosen.edge_voice
         )
 
     return resolve
@@ -72,7 +70,6 @@ async def save_tts_settings(current: TtsSettings) -> None:
             "tts_engine": current.engine,
             "kokoro_voice": current.kokoro_voice,
             "edge_voice": current.edge_voice,
-            "voxtral_voice": current.voxtral_voice,
         }
     )
 
@@ -228,7 +225,7 @@ async def queue_bookmarks(bookmark_ids: list[str]) -> QueueOutcome:
         bm = bookmarks.get(bid, {})
         lang = bm.get("lang") or ""
         engine, voice = tts.resolve_engine_and_voice(
-            lang, chosen.engine, chosen.kokoro_voice, chosen.edge_voice, chosen.voxtral_voice
+            lang, chosen.engine, chosen.kokoro_voice, chosen.edge_voice
         )
         # The check above is a cheap pre-filter; the insert re-checks
         # atomically in case another caller (say the auto generation

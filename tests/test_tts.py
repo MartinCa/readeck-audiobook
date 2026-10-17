@@ -98,41 +98,10 @@ class TestWithRetries:
         assert len(calls) == 1
 
 
-class TestResolveVoxtral:
-    def test_voxtral_for_english_when_a_server_is_configured(self, monkeypatch):
-        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
-        assert tts.resolve_engine_and_voice("en-US", "voxtral", voxtral_voice="casual_male") == (
-            "voxtral",
-            "casual_male",
-        )
-
-    def test_the_default_voice_comes_from_the_environment(self, monkeypatch):
-        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
-        monkeypatch.setattr(tts.config, "VOXTRAL_VOICE", "neutral_female")
-        assert tts.resolve_engine_and_voice("en", "voxtral") == ("voxtral", "neutral_female")
-
-    def test_other_languages_fall_back_to_edge_tts(self, monkeypatch):
-        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "http://voxtral:8091")
-        assert tts.resolve_engine_and_voice("de", "voxtral") == ("edge-tts", "de-DE-KatjaNeural")
-
-    def test_without_a_server_it_falls_back_to_edge_tts_and_says_so(self, monkeypatch, caplog):
-        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "")
-        with caplog.at_level("WARNING", logger="app.tts"):
-            assert tts.resolve_engine_and_voice("en", "voxtral")[0] == "edge-tts"
-        assert "VOXTRAL_URL is not set" in caplog.text
-
-    def test_other_languages_fall_back_without_a_warning(self, monkeypatch, caplog):
-        """Voxtral is English only, so a German article going to edge-tts is expected."""
-        monkeypatch.setattr(tts.config, "VOXTRAL_URL", "")
-        with caplog.at_level("WARNING", logger="app.tts"):
-            tts.resolve_engine_and_voice("de", "voxtral")
-        assert caplog.text == ""
-
-    def test_only_the_servers_english_presets_are_offered(self):
-        assert "casual_female" in tts.VOXTRAL_ENGLISH_VOICES
-        assert not any(
-            v.split("_")[0] in {"de", "fr", "es", "it"} for v in tts.VOXTRAL_ENGLISH_VOICES
-        )
+class TestResolveRemovedEngine:
+    def test_a_saved_voxtral_choice_falls_back_to_edge_tts(self):
+        """Voxtral was removed; a setting saved while it existed must not break queueing."""
+        assert tts.resolve_engine_and_voice("en", "voxtral") == ("edge-tts", "en-US-AriaNeural")
 
 
 class TestResolveKokoroSid:
@@ -674,23 +643,17 @@ class TestGenerateAudio:
             calls["kokoro"] = {"voice": voice, "text": text}
             output_path.write_bytes(b"kokoro-audio")
 
-        async def fake_voxtral(text, output_path, voice="", on_progress=None):
-            calls["voxtral"] = {"voice": voice, "text": text}
-            output_path.write_bytes(b"voxtral-audio")
-
         monkeypatch.setattr(tts, "synthesize_edge_tts", fake_edge)
         monkeypatch.setattr(tts, "synthesize_kokoro", fake_kokoro)
-        monkeypatch.setattr("app.voxtral.synthesize_voxtral", fake_voxtral)
         monkeypatch.setattr(tts, "_tag_mp3", lambda *a, **k: None)
         return calls
 
-    async def test_dispatches_voxtral_jobs(self, audio_dir, fake_backends):
-        path = await tts.generate_audio(
-            "job1", "Hello world", engine="voxtral", voice="casual_male"
-        )
-        assert fake_backends["voxtral"]["voice"] == "casual_male"
-        assert "edge" not in fake_backends and "kokoro" not in fake_backends
-        assert path.read_bytes() == b"voxtral-audio"
+    async def test_a_job_for_an_engine_that_was_removed_fails_with_a_clear_message(
+        self, audio_dir, fake_backends
+    ):
+        with pytest.raises(ValueError, match="Unknown TTS engine 'voxtral'.*retry the job"):
+            await tts.generate_audio("job1", "Hello world", engine="voxtral", voice="casual_male")
+        assert fake_backends == {}
 
     async def test_uses_the_engine_recorded_on_the_job(self, audio_dir, fake_backends):
         await tts.generate_audio("job1", "Hello world", engine="kokoro", voice="af_heart")
