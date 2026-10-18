@@ -272,7 +272,10 @@ async def create_jobs(body: BookmarkIds):
 async def list_jobs(page: int = Query(1, ge=1)):
     """Queued, running and failed jobs. A completed job is its bookmark's audio."""
     rows, total = await models.list_jobs(
-        limit=JOBS_PER_PAGE, offset=(page - 1) * JOBS_PER_PAGE, statuses=models.OPEN_STATUSES
+        limit=JOBS_PER_PAGE,
+        offset=(page - 1) * JOBS_PER_PAGE,
+        statuses=models.OPEN_STATUSES,
+        queue_order=True,
     )
     return JobPage(
         items=[Job.from_row(r) for r in rows],
