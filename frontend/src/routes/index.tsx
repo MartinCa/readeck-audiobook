@@ -4,6 +4,7 @@ import { ErrorState } from "@/components/ErrorState";
 import { Pagination } from "@/components/Pagination";
 import { LinkButton } from "@/components/link-button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useClampPage } from "@/hooks/use-clamp-page";
 import { BookmarkCard } from "@/features/bookmarks/components/BookmarkCard";
 import { BookmarkFilters } from "@/features/bookmarks/components/BookmarkFilters";
 import { BookmarkListSkeleton } from "@/features/bookmarks/components/BookmarkListSkeleton";
@@ -15,7 +16,6 @@ import {
 } from "@/features/bookmarks/filters";
 import { useBookmarks } from "@/features/bookmarks/hooks";
 import { plural } from "@/lib/format";
-import { useClampPage } from "@/lib/use-clamp-page";
 import type { Bookmark } from "@/lib/types";
 
 export const Route = createFileRoute("/")({
@@ -54,9 +54,9 @@ function BookmarksPage() {
     });
   }
 
-  useClampPage(
+  const clamping = useClampPage(
     search.page ?? 1,
-    bookmarks.data?.totalPages,
+    bookmarks.data,
     (last) =>
       void navigate({
         search: (prev) => ({ ...prev, page: last > 1 ? last : undefined }),
@@ -88,7 +88,7 @@ function BookmarksPage() {
         />
       )}
 
-      {bookmarks.isPending ? (
+      {bookmarks.isPending || clamping ? (
         <BookmarkListSkeleton />
       ) : bookmarks.isError ? (
         <ErrorState

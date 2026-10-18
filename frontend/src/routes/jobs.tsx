@@ -9,12 +9,12 @@ import { LinkButton } from "@/components/link-button";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useClampPage } from "@/hooks/use-clamp-page";
 import { jobsApi } from "@/features/jobs/api";
 import { JobCard } from "@/features/jobs/components/JobCard";
 import { useDeleteJobs, useJobs, useRetryJobs } from "@/features/jobs/hooks";
 import { plural } from "@/lib/format";
 import { notifications } from "@/lib/notifications";
-import { useClampPage } from "@/lib/use-clamp-page";
 
 const jobsSearchSchema = z.object({
   page: z.number().int().min(1).optional().catch(undefined),
@@ -34,9 +34,9 @@ function JobsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  useClampPage(
+  const clamping = useClampPage(
     page,
-    jobs.data?.totalPages,
+    jobs.data,
     (last) => void navigate({ search: { page: last > 1 ? last : undefined }, replace: true }),
   );
 
@@ -100,7 +100,7 @@ function JobsPage() {
         Audio that is queued, being generated, or failed. Finished audio is on its bookmark.
       </p>
 
-      {jobs.isPending ? (
+      {jobs.isPending || clamping ? (
         <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading jobs">
           {Array.from({ length: 3 }, (_, i) => (
             <Skeleton key={i} className="h-16 w-full rounded-xl" />
