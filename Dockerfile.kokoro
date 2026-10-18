@@ -80,6 +80,17 @@ RUN curl -fsSL -o /tmp/kokoro.tar.bz2 \
     tar -xjf /tmp/kokoro.tar.bz2 -C /app/models/kokoro --strip-components=1 && \
     rm /tmp/kokoro.tar.bz2
 
+# Piper voices, for TTS_ENGINE=piper: one directory per voice under
+# /app/models/piper, run by the same sherpa-onnx. Both are English (US) "high"
+# quality; the ryan voice's dataset is CC BY-NC-SA 4.0 (personal use).
+RUN mkdir -p /app/models/piper && \
+    for voice in vits-piper-en_US-lessac-high vits-piper-en_US-ryan-high; do \
+      curl -fsSL -o /tmp/piper.tar.bz2 \
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/${voice}.tar.bz2" && \
+      tar -xjf /tmp/piper.tar.bz2 -C /app/models/piper && \
+      rm /tmp/piper.tar.bz2; \
+    done
+
 COPY app/ ./app/
 COPY --from=frontend-build /frontend/dist/ ./static/
 

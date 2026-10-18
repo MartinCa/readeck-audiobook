@@ -18,6 +18,7 @@ Browse your Readeck library, select articles, queue them for audio generation, a
 - Three TTS backends, chosen under Settings → Voice:
   - **edge-tts** (default) — Microsoft neural voices, no API key, ~200 MB Docker image. A cloud service: your article text is sent to Microsoft
   - **kokoro** (optional) — small local neural model, runs in-process, no API key, English only for now
+  - **piper** (optional) — Piper voices run by the same sherpa-onnx on the CPU, English only; shipped in the Kokoro images
 - Automatic language detection: voice is chosen based on the bookmark's `lang` field
 - Readable filenames and ID3 tags — files land as `how-to-build-a-thing-a1b2c3d4.mp3`, tagged with the article title
 - Long articles are synthesised in chunks, with retries, so a dropped connection doesn't waste the whole run
@@ -66,9 +67,11 @@ All settings are passed as environment variables (or via `.env`).
 |---|---|---|---|
 | `READECK_BASE_URL` | Yes | — | Readeck instance URL, e.g. `https://readeck.example.com` |
 | `READECK_API_TOKEN` | Yes | — | Readeck Bearer API token |
-| `TTS_ENGINE` | No | `edge-tts` | Default engine, `edge-tts` or `kokoro`; changeable under Settings → Voice |
+| `TTS_ENGINE` | No | `edge-tts` | Default engine, `edge-tts`, `kokoro` or `piper`; changeable under Settings → Voice |
 | `EDGE_TTS_VOICE` | No | `en-US-AriaNeural` | Default voice when language cannot be detected |
 | `KOKORO_VOICE` | No | `af_heart` | Default Kokoro voice; changeable under Settings → Voice |
+| `PIPER_VOICE` | No | `lessac-high` | Default Piper voice, `lessac-high` or `ryan-high`; changeable under Settings → Voice |
+| `PIPER_NUM_THREADS` | No | `2` | CPU threads for Piper synthesis |
 | `KOKORO_IDLE_UNLOAD_SECONDS` | No | `300` | Unload the Kokoro model after this long without a job; `0` keeps it loaded |
 | `MAX_CONCURRENT_JOBS` | No | `2` | Maximum simultaneous TTS jobs |
 | `DATA_DIR` | No | `/app/data` | Where the SQLite database lives |
@@ -184,6 +187,8 @@ docker build -f Dockerfile.kokoro --build-arg KOKORO_ACCEL=cuda -t readeck-audio
 **GPU memory while idle.** The model is loaded on the first Kokoro job and cached, because reloading it per job would add several seconds to every one. An onnxruntime session holds its weights and its allocator arena for as long as it exists, so on CUDA the app sat on roughly 2.3 GB of VRAM between jobs — `nvidia-smi` shows the uvicorn process holding it at 0% utilisation. `KOKORO_IDLE_UNLOAD_SECONDS` (default 300) drops the model once that long passes with no Kokoro job, and the next job loads it again; set it to `0` on a machine dedicated to this app, where holding the memory costs nothing. Note that a few hundred MB of CUDA context stays attached to the process after the unload — the driver keeps it until the process exits — so expect the figure to fall to a few hundred MB rather than to zero.
 
 **`Failed to load library libonnxruntime_providers_cuda.so with error: lib*.so: cannot open shared object file`**: the CUDA build of sherpa-onnx does not bundle the CUDA runtime — unlike the old torch wheels, which did. Those libraries come from the `nvidia-*-cu12` wheels in `requirements-kokoro-cuda.txt`, whose directories `Dockerfile.kokoro` registers with `ldconfig`. If a job fails this way, a library is missing from that list: add the matching wheel (the name follows the library, e.g. `libcurand.so.10` → `nvidia-curand-cu12`) and rebuild. The image build runs `ldd` over the provider and fails if anything is unresolved, so this should be caught at build time rather than on the first job.
+
+**Piper voices.** The Kokoro images also carry two [Piper](https://github.com/rhasspy/piper) voices, `lessac-high` and `ryan-high` (English US, one speaker each, from sherpa-onnx's `tts-models` release), under `/app/models/piper`. They run on the CPU through the same sherpa-onnx, roughly twice as fast as real time end to end on two threads (my measurement on a 4-core sandbox, so treat it as a guide), and the model is loaded for the job and dropped after it. Choose Piper under Settings → Voice; it appears when the image has the voices. Mind the licences: the `ryan` voice's dataset is CC BY-NC-SA 4.0, so it is for personal use only, and `lessac` is trained on the Blizzard 2013 data, whose terms you should read before using it commercially.
 
 **Voices.** `KOKORO_VOICE` still takes names (`af_heart`, `am_michael`, `bf_emma`, …). sherpa-onnx selects speakers by integer id internally, and `app/tts.py` holds the name→id table for the bundled `kokoro-multi-lang-v1_0` model. An unrecognised name fails the job with the list of valid English voices rather than quietly synthesising in another voice.
 

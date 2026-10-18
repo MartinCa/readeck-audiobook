@@ -40,11 +40,18 @@ READECK_API_TOKEN = os.environ.get("READECK_API_TOKEN", "")
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "edge-tts")
 EDGE_TTS_VOICE = os.environ.get("EDGE_TTS_VOICE", "en-US-AriaNeural")
 KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
+PIPER_VOICE = os.environ.get("PIPER_VOICE", "lessac-high")
 
 # Kokoro runs through sherpa-onnx, which loads the model from a directory of
 # files (model.onnx, voices.bin, tokens.txt, espeak-ng-data/) rather than
 # downloading them itself. Dockerfile.kokoro extracts them here at build time.
 KOKORO_MODEL_DIR = _env_path("KOKORO_MODEL_DIR", "/app/models/kokoro")
+# Piper (a VITS model, also run by sherpa-onnx) keeps one directory per voice
+# under here: <PIPER_MODEL_DIR>/vits-piper-en_US-lessac-high/ and so on.
+# Dockerfile.kokoro extracts them at build time. Piper is light enough that it
+# always runs on the CPU, which leaves the GPU to whatever else needs it.
+PIPER_MODEL_DIR = _env_path("PIPER_MODEL_DIR", "/app/models/piper")
+PIPER_NUM_THREADS = _env_int("PIPER_NUM_THREADS", 2)
 # "cpu" or "cuda". sherpa-onnx falls back to CPU silently when the CUDA
 # execution provider fails to register, so see the note in tts.py about how the
 # actually-loaded provider gets logged.

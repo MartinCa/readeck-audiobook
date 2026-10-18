@@ -69,6 +69,15 @@ KOKORO_LEXICONS = ("lexicon-us-en.txt", "lexicon-zh.txt")
 
 ENGINE_EDGE = "edge-tts"
 ENGINE_KOKORO = "kokoro"
+ENGINE_PIPER = "piper"
+PIPER_SUPPORTED_LANGS = {"en"}
+# Voice name -> (directory under PIPER_MODEL_DIR, model file). Both are
+# English (US) single-speaker "high" quality voices from sherpa-onnx's tts-models
+# release; the ryan voice's dataset is CC BY-NC-SA 4.0, so personal use only.
+PIPER_VOICES = {
+    "lessac-high": ("vits-piper-en_US-lessac-high", "en_US-lessac-high.onnx"),
+    "ryan-high": ("vits-piper-en_US-ryan-high", "en_US-ryan-high.onnx"),
+}
 
 
 # English edge-tts voices offered in the settings. Other languages keep the
@@ -93,10 +102,20 @@ def kokoro_available() -> bool:
     )
 
 
+def piper_available() -> bool:
+    """Whether this image has sherpa-onnx and at least one bundled Piper voice."""
+    return importlib.util.find_spec("sherpa_onnx") is not None and any(
+        (config.PIPER_MODEL_DIR / directory / model).is_file()
+        for directory, model in PIPER_VOICES.values()
+    )
+
+
 def available_engines() -> list[str]:
     engines = [ENGINE_EDGE]
     if kokoro_available():
         engines.append(ENGINE_KOKORO)
+    if piper_available():
+        engines.append(ENGINE_PIPER)
     return engines
 
 
@@ -119,6 +138,7 @@ def resolve_engine_and_voice(
     engine: str | None = None,
     kokoro_voice: str | None = None,
     edge_voice: str | None = None,
+    piper_voice: str | None = None,
 ) -> tuple[str, str]:
     """Decide which engine and voice a job in `lang` will actually use.
 
@@ -129,7 +149,10 @@ def resolve_engine_and_voice(
     """
     base = (lang or "").split("-")[0].lower()
     wanted = engine or config.TTS_ENGINE
-    if wanted not in {ENGINE_EDGE, ENGINE_KOKORO} and wanted not in _unknown_engines_reported:
+    if (
+        wanted not in {ENGINE_EDGE, ENGINE_KOKORO, ENGINE_PIPER}
+        and wanted not in _unknown_engines_reported
+    ):
         _unknown_engines_reported.add(wanted)
         logger.warning(
             "TTS engine %r no longer exists, so edge-tts is used instead; "
@@ -138,6 +161,8 @@ def resolve_engine_and_voice(
         )
     if wanted == ENGINE_KOKORO and base in KOKORO_SUPPORTED_LANGS:
         return ENGINE_KOKORO, kokoro_voice or config.KOKORO_VOICE
+    if wanted == ENGINE_PIPER and base in PIPER_SUPPORTED_LANGS:
+        return ENGINE_PIPER, piper_voice or config.PIPER_VOICE
     return ENGINE_EDGE, _pick_voice(lang, edge_voice)
 
 
@@ -801,6 +826,108 @@ async def synthesize_kokoro(
     await asyncio.to_thread(_run_sync)
 
 
+def _piper_files(voice: str) -> tuple[Path, Path, Path]:
+    """The model, tokens and espeak-ng data of a Piper voice, checked to exist."""
+    try:
+        directory, model = PIPER_VOICES[voice]
+    except KeyError:
+        raise ValueError(
+            f"Unknown Piper voice {voice!r}. Voices: {', '.join(PIPER_VOICES)}"
+        ) from None
+    root = config.PIPER_MODEL_DIR / directory
+    files = (root / model, root / "tokens.txt", root / "espeak-ng-data")
+    for path in files:
+        if not path.exists():
+            raise RuntimeError(
+                f"Piper model file {path} is missing. PIPER_MODEL_DIR should hold the "
+                f"extracted sherpa-onnx voice directory {directory!r}."
+            )
+    return files
+
+
+async def synthesize_piper(
+    text: str, output_path: Path, voice: str = "", on_progress: ProgressCallback | None = None
+):
+    """Synthesize speech with a local Piper voice via sherpa-onnx, on the CPU.
+
+    The model is loaded for the job and dropped after it: it loads in about a
+    second, so there is no cache, idle unload or lock to keep.
+    """
+    import subprocess
+    import tempfile
+
+    import sherpa_onnx
+    import soundfile as sf
+
+    voice = voice or config.PIPER_VOICE
+    model, tokens, data_dir = _piper_files(voice)
+    chunks = _split_text(text, config.TTS_CHUNK_CHARS)
+    if not chunks:
+        raise ValueError("No readable text to synthesize")
+
+    await _report_progress(on_progress, 0, len(chunks))
+    loop = asyncio.get_running_loop()
+
+    def _report_from_thread(done: int) -> None:
+        if on_progress is None:
+            return
+        with contextlib.suppress(RuntimeError):  # the loop closed under us at shutdown
+            asyncio.run_coroutine_threadsafe(_report_progress(on_progress, done, len(chunks)), loop)
+
+    def _run_sync():
+        engine = sherpa_onnx.OfflineTts(
+            sherpa_onnx.OfflineTtsConfig(
+                model=sherpa_onnx.OfflineTtsModelConfig(
+                    vits=sherpa_onnx.OfflineTtsVitsModelConfig(
+                        model=str(model), tokens=str(tokens), data_dir=str(data_dir)
+                    ),
+                    provider="cpu",
+                    num_threads=config.PIPER_NUM_THREADS,
+                )
+            )
+        )
+        gen_config = sherpa_onnx.GenerationConfig()
+        gen_config.sid = 0
+        gen_config.speed = 1.0
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            wav_path = Path(tmp.name)
+        try:
+            # Appended piece by piece, as for Kokoro, so a long article never
+            # sits in memory as one waveform.
+            writer = None
+            try:
+                for index, chunk in enumerate(chunks, 1):
+                    audio = engine.generate(chunk, gen_config)
+                    if audio.sample_rate <= 0 or len(audio.samples) == 0:
+                        raise RuntimeError(
+                            f"Piper produced no audio for chunk {index}/{len(chunks)}"
+                        )
+                    if writer is None:
+                        writer = sf.SoundFile(
+                            str(wav_path),
+                            mode="w",
+                            samplerate=audio.sample_rate,
+                            channels=1,
+                            subtype="PCM_16",
+                        )
+                    writer.write(audio.samples)
+                    del audio
+                    _report_from_thread(index)
+            finally:
+                if writer is not None:
+                    writer.close()
+
+            result = subprocess.run(_wav_to_mp3_command(wav_path, output_path), capture_output=True)
+            if result.returncode != 0:
+                stderr = result.stderr.decode(errors="replace")
+                raise RuntimeError(f"ffmpeg failed encoding Piper output to mp3: {stderr[-2000:]}")
+        finally:
+            wav_path.unlink(missing_ok=True)
+
+    await asyncio.to_thread(_run_sync)
+
+
 # ── Tagging ────────────────────────────────────────────────────────────────────
 
 
@@ -868,6 +995,8 @@ async def generate_audio(
     try:
         if engine == ENGINE_KOKORO:
             await synthesize_kokoro(cleaned, partial_path, voice, on_progress)
+        elif engine == ENGINE_PIPER:
+            await synthesize_piper(cleaned, partial_path, voice, on_progress)
         elif engine == ENGINE_EDGE:
             await synthesize_edge_tts(cleaned, partial_path, voice, on_progress)
         else:

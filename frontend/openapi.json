@@ -875,12 +875,17 @@
           "kokoroVoice": {
             "title": "Kokorovoice",
             "type": "string"
+          },
+          "piperVoice": {
+            "title": "Pipervoice",
+            "type": "string"
           }
         },
         "required": [
           "engine",
           "kokoroVoice",
-          "edgeVoice"
+          "edgeVoice",
+          "piperVoice"
         ],
         "title": "TtsSettings",
         "type": "object"
@@ -920,15 +925,28 @@
             },
             "title": "Kokorovoices",
             "type": "array"
+          },
+          "piperVoice": {
+            "title": "Pipervoice",
+            "type": "string"
+          },
+          "piperVoices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pipervoices",
+            "type": "array"
           }
         },
         "required": [
           "engine",
           "kokoroVoice",
           "edgeVoice",
+          "piperVoice",
           "engines",
           "kokoroVoices",
-          "edgeVoices"
+          "edgeVoices",
+          "piperVoices"
         ],
         "title": "TtsStatus",
         "type": "object"

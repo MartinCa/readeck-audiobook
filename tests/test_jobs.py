@@ -330,10 +330,27 @@ class TestQueueBookmarks:
         assert sorted((r.queued, r.skipped) for r in results) == [(0, 1), (1, 0)]
         assert len(await models.list_job_ids()) == 1
 
+    async def test_jobs_record_a_piper_choice_for_english_only(self, store_bookmarks):
+        await jobs.save_tts_settings(
+            jobs.TtsSettings("piper", "af_heart", "en-US-AriaNeural", "ryan-high")
+        )
+        await store_bookmarks(
+            [
+                {"id": "en", "title": "E", "lang": "en", "created": "2026-01-01T00:00:00Z"},
+                {"id": "da", "title": "D", "lang": "da", "created": "2026-01-01T00:00:00Z"},
+            ]
+        )
+        await jobs.queue_bookmarks(["en", "da"])
+        rows = {j["bookmark_id"]: j for j in (await models.list_jobs())[0]}
+        assert (rows["en"]["tts_engine"], rows["en"]["voice"]) == ("piper", "ryan-high")
+        assert rows["da"]["tts_engine"] == "edge-tts"
+
     async def test_jobs_record_the_engine_and_voice_chosen_in_the_settings(
         self, monkeypatch, store_bookmarks
     ):
-        await jobs.save_tts_settings(jobs.TtsSettings("kokoro", "bf_emma", "en-US-AriaNeural"))
+        await jobs.save_tts_settings(
+            jobs.TtsSettings("kokoro", "bf_emma", "en-US-AriaNeural", "ryan-high")
+        )
         await store_bookmarks(
             [
                 {"id": "en", "title": "E", "lang": "en", "created": "2026-01-01T00:00:00Z"},

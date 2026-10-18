@@ -810,14 +810,18 @@ async def test_health_stays_open_for_container_healthchecks(client, with_auth):
 
 async def test_tts_settings_default_to_the_environment_and_can_be_changed(client, monkeypatch):
     monkeypatch.setattr(tts, "kokoro_available", lambda: True)
+    monkeypatch.setattr(tts, "piper_available", lambda: True)
     body = (await client.get("/api/settings")).json()["tts"]
     assert body["engine"] == "edge-tts"
-    assert body["engines"] == ["edge-tts", "kokoro"]
+    assert body["engines"] == ["edge-tts", "kokoro", "piper"]
     assert "af_heart" in body["kokoroVoices"]
+    assert body["piperVoices"] == ["lessac-high", "ryan-high"]
+    assert body["piperVoice"] == "lessac-high"
     choice = {
-        "engine": "kokoro",
+        "engine": "piper",
         "kokoroVoice": "bf_emma",
         "edgeVoice": "en-GB-SoniaNeural",
+        "piperVoice": "ryan-high",
     }
     resp = await client.put("/api/settings", json={"tts": choice})
     assert resp.status_code == 200
@@ -829,10 +833,22 @@ async def test_tts_settings_reject_an_unavailable_engine_or_unknown_voice(client
     monkeypatch.setattr(tts, "kokoro_available", lambda: False)
     resp = await client.put(
         "/api/settings",
-        json={"tts": {"engine": "kokoro", "kokoroVoice": "nope", "edgeVoice": "en-US-AriaNeural"}},
+        json={
+            "tts": {
+                "engine": "kokoro",
+                "kokoroVoice": "nope",
+                "edgeVoice": "en-US-AriaNeural",
+                "piperVoice": "nobody",
+            }
+        },
     )
     assert resp.status_code == 422
-    assert set(resp.json()["errors"]) == {"tts.engine", "tts.kokoroVoice"}
+    assert set(resp.json()["errors"]) == {"tts.engine", "tts.kokoroVoice", "tts.piperVoice"}
+
+
+async def test_piper_is_only_offered_where_its_voices_are_installed(client, monkeypatch):
+    monkeypatch.setattr(tts, "piper_available", lambda: False)
+    assert "piper" not in (await client.get("/api/settings")).json()["tts"]["engines"]
 
 
 async def test_an_engine_that_was_removed_cannot_be_chosen(client):
@@ -843,6 +859,7 @@ async def test_an_engine_that_was_removed_cannot_be_chosen(client):
                 "engine": "voxtral",
                 "kokoroVoice": "af_heart",
                 "edgeVoice": "en-US-AriaNeural",
+                "piperVoice": "lessac-high",
             }
         },
     )
