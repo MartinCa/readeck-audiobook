@@ -379,23 +379,30 @@ def count_words(text: str) -> int:
 _PULL_QUOTE_MIN_WORDS = 8
 
 
+def _spoken_words(text: str) -> list[str]:
+    """Lowercased words with apostrophes removed, so "don’t" and "dont" compare equal."""
+    return re.findall(r"\w+", re.sub(r"['’‘`]", "", text.casefold()))
+
+
 def _drop_pull_quotes(blocks: list[str]) -> list[str]:
     """Drop a paragraph that only repeats text already read out.
 
     Publishers such as the BBC print a pull quote, a sentence lifted from the
     body, as a paragraph of its own beside it. On a page that is emphasis; read
     aloud it is the same sentence twice. Case, punctuation and entities are
-    ignored since the quote is rarely typeset like the original.
+    ignored since the quote is rarely typeset like the original. Words are
+    compared whole, so "here" never matches inside "nowhere".
     """
-    seen = ""
+    earlier: list[str] = []
     kept: list[str] = []
     for block in blocks:
-        words = re.findall(r"\w+", block.lower())
-        if "\n" not in block and len(words) >= _PULL_QUOTE_MIN_WORDS and "".join(words) in seen:
+        words = _spoken_words(block)
+        # Padded so a match can only start and end on a word boundary.
+        key = f" {' '.join(words)} "
+        if len(words) >= _PULL_QUOTE_MIN_WORDS and any(key in text for text in earlier):
             continue
         kept.append(block)
-        # The separator keeps a match from spanning two paragraphs.
-        seen += "".join(words) + "|"
+        earlier.append(key)
     return kept
 
 

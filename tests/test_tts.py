@@ -285,7 +285,40 @@ class TestCleanMarkdown:
         )
         result = _clean_markdown(md)
         assert result.count("marketing tourist access") == 1
+        assert result.startswith("Either way, National Geographic reports")
         assert result.endswith("orchestrated responsibly.")
+
+    def test_drops_a_pull_quote_repeating_an_earlier_paragraph(self):
+        quote = "the pyramids keep far more secrets than anyone has managed to uncover so far"
+        md = f"First, {quote}.\n\nA paragraph in between.\n\nAnother one.\n\n{quote.capitalize()}"
+        result = _clean_markdown(md)
+        assert result.count("keep far more secrets") == 1
+        assert result.endswith("Another one.")
+
+    def test_drops_a_blockquote_pull_quote(self):
+        md = (
+            "Archaeologists have found grain silos in Egypt and they look nothing like "
+            "pyramids, she says.\n\n"
+            "> Archaeologists have found grain silos in Egypt and they look nothing like pyramids"
+        )
+        assert _clean_markdown(md).count("grain silos") == 1
+
+    def test_drops_a_pull_quote_wrapped_over_several_lines(self):
+        md = (
+            "The scientists involved are under strict orders not to make invasive "
+            "excavations anywhere.\n\n"
+            "> The scientists involved are under strict\n> orders not to make invasive\n"
+            "> excavations anywhere"
+        )
+        assert _clean_markdown(md).count("excavations anywhere") == 1
+
+    def test_compares_whole_words_when_spotting_a_pull_quote(self):
+        """A different sentence differing by one word must not be dropped."""
+        md = (
+            "The keys are nowhere to be found in the house or in the garden today.\n\n"
+            "The keys are now here to be found in the house or in the garden today."
+        )
+        assert _clean_markdown(md).count("The keys are") == 2
 
     def test_keeps_a_short_repeated_paragraph(self):
         assert _clean_markdown("Never again.\n\nNever again.") == "Never again.\n\nNever again."
