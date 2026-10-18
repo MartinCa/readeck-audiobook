@@ -15,7 +15,7 @@
 # sherpa-onnx cannot run without a GPU, so the tag has to change too.
 services:
   readeck-audiobook:
-    image: ${READECK_AUDIOBOOK_IMAGE:-ghcr.io/martinca/readeck-audiobook:latest-kokoro-cuda@sha256:6c427a129691087c14fc702119473255dd38d5198c5478b24a612337029980c5}
+    image: ${READECK_AUDIOBOOK_IMAGE:-ghcr.io/martinca/readeck-audiobook:latest-kokoro-cuda@sha256:7436f402d8754247a40201e2aae2fa919d87a2daba1a9cc47e093971fd9a5ca7}
     ports:
       - "8080:8080"
     environment:
