@@ -122,6 +122,18 @@ class TestResolvePiper:
         )
         assert tts.resolve_engine_and_voice("en", "piper") == ("piper", "ryan-high")
 
+    def test_a_typo_is_not_replaced_even_when_voices_are_installed(self, tmp_path, monkeypatch):
+        """Only a known voice the image lacks is swapped; a typo must fail loudly."""
+        monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path)
+        directory, model = tts.PIPER_VOICES["ryan-high"]
+        (tmp_path / directory / "espeak-ng-data").mkdir(parents=True)
+        (tmp_path / directory / model).write_bytes(b"onnx")
+        (tmp_path / directory / "tokens.txt").write_text("tokens")
+        assert tts.resolve_engine_and_voice("en", "piper", piper_voice="nobody") == (
+            "piper",
+            "nobody",
+        )
+
     def test_other_languages_fall_back_to_edge_tts(self):
         assert tts.resolve_engine_and_voice("de", "piper") == ("edge-tts", "de-DE-KatjaNeural")
 

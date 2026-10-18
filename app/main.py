@@ -357,8 +357,8 @@ async def _settings_response() -> Settings:
     chosen = await jobs.load_tts_settings()
     piper_voices = _piper_voices()
     # The form sends this back on every save, so it must be one it can offer. An
-    # unknown name (a typo in PIPER_VOICE) is shown as the first offered voice here
-    # but still fails loudly if a job is queued with it.
+    # unknown name (a typo in PIPER_VOICE) is shown as the first offered voice
+    # here; a job queued with it still fails, naming the valid voices.
     piper_voice = tts.usable_piper_voice(chosen.piper_voice)
     if piper_voice not in piper_voices:
         piper_voice = piper_voices[0]

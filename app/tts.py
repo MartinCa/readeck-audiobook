@@ -119,11 +119,16 @@ def piper_installed_voices() -> list[str]:
 def usable_piper_voice(voice: str) -> str:
     """`voice` if it is installed, else the first installed voice.
 
-    Where no voice is installed (Piper is not offered there) the name comes back
-    unchanged, so a job still names the voice that was asked for.
+    Only a voice this app knows but the image lacks is replaced. A name it does not
+    know (a typo in PIPER_VOICE) comes back unchanged so synthesis fails and lists
+    the valid voices, rather than reading an article in a voice nobody chose. The
+    name also comes back unchanged where no voice is installed (Piper is not
+    offered there).
     """
     installed = piper_installed_voices()
-    return voice if not installed or voice in installed else installed[0]
+    if voice in PIPER_VOICES and installed and voice not in installed:
+        return installed[0]
+    return voice
 
 
 def piper_available() -> bool:
