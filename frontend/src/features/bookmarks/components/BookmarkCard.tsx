@@ -4,13 +4,16 @@ import {
   AudioLinesIcon,
   BanIcon,
   BookmarkIcon,
+  CircleCheckIcon,
   DownloadIcon,
   EllipsisVerticalIcon,
   ExternalLinkIcon,
   FileXIcon,
+  RefreshCwIcon,
   Trash2Icon,
 } from "lucide-react";
 import { ActionButton } from "@/components/action-button";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/link-button";
@@ -29,7 +32,7 @@ import {
   type ReadeckAction,
 } from "@/features/bookmarks/components/ReadeckActionDialog";
 import { describeQueueResult } from "@/features/bookmarks/queueMessage";
-import { useGenerateAudio } from "@/features/bookmarks/hooks";
+import { useDeleteAudio, useGenerateAudio, useSetAutoExcluded } from "@/features/bookmarks/hooks";
 import { notifications } from "@/lib/notifications";
 import { formatDateTime, formatDay, formatDuration, formatUtcDay } from "@/lib/format";
 import type { Bookmark } from "@/lib/types";
@@ -49,7 +52,10 @@ export function BookmarkCard({
   onRemoved,
 }: BookmarkCardProps) {
   const [action, setAction] = useState<ReadeckAction | null>(null);
+  const [confirmDeleteAudio, setConfirmDeleteAudio] = useState(false);
   const generate = useGenerateAudio();
+  const deleteAudio = useDeleteAudio();
+  const setExcluded = useSetAutoExcluded();
   const meta = [
     bookmark.siteName,
     bookmark.authors.join(", "),
@@ -71,6 +77,32 @@ export function BookmarkCard({
       onError: (error) =>
         notifications.error("Could not queue audio generation", { description: error.message }),
     });
+  }
+
+  function onDeleteAudio() {
+    deleteAudio.mutate([bookmark.id], {
+      onSuccess: () => {
+        notifications.success("Deleted the audio");
+        setConfirmDeleteAudio(false);
+      },
+      onError: (error) =>
+        notifications.error("Could not delete the audio", { description: error.message }),
+    });
+  }
+
+  function onToggleExcluded() {
+    const exclude = !bookmark.autoExcluded;
+    setExcluded.mutate(
+      { ids: [bookmark.id], excluded: exclude },
+      {
+        onSuccess: () =>
+          notifications.success(
+            exclude ? "Excluded from auto generation" : "Included in auto generation",
+          ),
+        onError: (error) =>
+          notifications.error("Could not change auto generation", { description: error.message }),
+      },
+    );
   }
 
   return (
@@ -106,13 +138,42 @@ export function BookmarkCard({
                       variant="ghost"
                       size="icon"
                       className="text-muted-foreground size-10 sm:size-8"
-                      aria-label={`Readeck actions for ${bookmark.title}`}
+                      aria-label={`Actions for ${bookmark.title}`}
                     />
                   }
                 >
                   <EllipsisVerticalIcon aria-hidden />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-52">
+                  {bookmark.audio && bookmark.hasArticle && !generating && (
+                    <DropdownMenuItem className="min-h-11 sm:min-h-0" onClick={onGenerate}>
+                      <RefreshCwIcon aria-hidden />
+                      Regenerate audio
+                    </DropdownMenuItem>
+                  )}
+                  {bookmark.audio && (
+                    <DropdownMenuItem
+                      className="min-h-11 sm:min-h-0"
+                      onClick={() => setConfirmDeleteAudio(true)}
+                    >
+                      <Trash2Icon aria-hidden />
+                      Delete audio
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem className="min-h-11 sm:min-h-0" onClick={onToggleExcluded}>
+                    {bookmark.autoExcluded ? (
+                      <>
+                        <CircleCheckIcon aria-hidden />
+                        Include in auto generation
+                      </>
+                    ) : (
+                      <>
+                        <BanIcon aria-hidden />
+                        Exclude from auto generation
+                      </>
+                    )}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   {bookmark.readeckUrl && (
                     <DropdownMenuItem
                       className="min-h-11 sm:min-h-0"
@@ -229,6 +290,15 @@ export function BookmarkCard({
           )}
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmDeleteAudio}
+        onOpenChange={setConfirmDeleteAudio}
+        title="Delete audio?"
+        description="The audio file of this bookmark will be deleted. The bookmark stays in Readeck, and you can generate the audio again."
+        confirmLabel="Delete audio"
+        onConfirm={onDeleteAudio}
+        pending={deleteAudio.isPending}
+      />
       <ReadeckActionDialog
         action={action}
         ids={[bookmark.id]}
