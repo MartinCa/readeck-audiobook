@@ -379,13 +379,21 @@ def count_words(text: str) -> int:
 _PULL_QUOTE_MIN_WORDS = 8
 
 
+_APOSTROPHES = re.compile(r"[’‘ʼ`]")
+_SPOKEN_WORD = re.compile(r"\w+(?:'\w+)*")
+
+
 def _spoken_words(text: str) -> list[str]:
-    """Lowercased words with apostrophes removed, so "don’t" and "dont" compare equal."""
-    return re.findall(r"\w+", re.sub(r"['’‘`]", "", text.casefold()))
+    """Lowercased words, with every apostrophe typeset the same.
+
+    The apostrophe stays part of the word: "don’t" and "don't" compare equal,
+    but "we're" is not "were".
+    """
+    return _SPOKEN_WORD.findall(_APOSTROPHES.sub("'", text.casefold()))
 
 
 def _drop_pull_quotes(blocks: list[str]) -> list[str]:
-    """Drop a paragraph that only repeats text already read out.
+    """Drop a block of text that only repeats what is already read out.
 
     Publishers such as the BBC print a pull quote, a sentence lifted from the
     body, as a paragraph of its own beside it. On a page that is emphasis; read

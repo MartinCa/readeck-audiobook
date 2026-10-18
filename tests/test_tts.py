@@ -320,6 +320,21 @@ class TestCleanMarkdown:
         )
         assert _clean_markdown(md).count("The keys are") == 2
 
+    def test_keeps_a_contraction_that_differs_from_a_real_word(self):
+        """ "we're" is not "were": a tense change is not a repeat."""
+        md = (
+            "We were going to the store when the phone rang.\n\n"
+            "We\u2019re going to the store when the phone rang."
+        )
+        assert _clean_markdown(md).count("going to the store") == 2
+
+    def test_matches_a_quote_typeset_with_another_apostrophe(self):
+        md = (
+            "They don't know much about the interiors of the pyramids at all.\n\n"
+            "They don\u2019t know much about the interiors of the pyramids at all"
+        )
+        assert _clean_markdown(md).count("know much about") == 1
+
     def test_keeps_a_short_repeated_paragraph(self):
         assert _clean_markdown("Never again.\n\nNever again.") == "Never again.\n\nNever again."
 
