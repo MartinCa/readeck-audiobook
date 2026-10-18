@@ -355,6 +355,13 @@ async def _settings_response() -> Settings:
     current = await autogen.load_settings()
     state = await autogen.load_run_state()
     chosen = await jobs.load_tts_settings()
+    piper_voices = _piper_voices()
+    # The form sends this back on every save, so it must be one it can offer. An
+    # unknown name (a typo in PIPER_VOICE) is shown as the first offered voice here
+    # but still fails loudly if a job is queued with it.
+    piper_voice = tts.usable_piper_voice(chosen.piper_voice)
+    if piper_voice not in piper_voices:
+        piper_voice = piper_voices[0]
     return Settings(
         sync=SyncStatus(
             cron=sync_cron,
@@ -381,11 +388,11 @@ async def _settings_response() -> Settings:
             engine=chosen.engine,
             kokoro_voice=chosen.kokoro_voice,
             edge_voice=chosen.edge_voice,
-            piper_voice=tts.usable_piper_voice(chosen.piper_voice),
+            piper_voice=piper_voice,
             engines=tts.available_engines(),
             kokoro_voices=tts.kokoro_english_voices(),
             edge_voices=list(tts.EDGE_ENGLISH_VOICES),
-            piper_voices=_piper_voices(),
+            piper_voices=piper_voices,
         ),
     )
 

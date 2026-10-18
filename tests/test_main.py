@@ -869,6 +869,25 @@ async def test_only_installed_piper_voices_are_offered(client, tmp_path, monkeyp
     assert resp.status_code == 200
 
 
+async def test_an_unknown_saved_piper_voice_does_not_block_saving_settings(client):
+    """A typo in PIPER_VOICE, on an image without Piper voices, must not lock the form."""
+    await models.set_settings({"piper_voice": "nobody"})
+    body = (await client.get("/api/settings")).json()["tts"]
+    assert body["piperVoice"] in body["piperVoices"]
+    resp = await client.put(
+        "/api/settings",
+        json={
+            "tts": {
+                "engine": "edge-tts",
+                "kokoroVoice": body["kokoroVoice"],
+                "edgeVoice": body["edgeVoice"],
+                "piperVoice": body["piperVoice"],
+            }
+        },
+    )
+    assert resp.status_code == 200
+
+
 async def test_piper_is_only_offered_where_its_voices_are_installed(client, monkeypatch):
     monkeypatch.setattr(tts, "piper_available", lambda: False)
     assert "piper" not in (await client.get("/api/settings")).json()["tts"]["engines"]
