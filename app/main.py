@@ -343,12 +343,19 @@ def _next_run(schedule: scheduler.Schedule, cron: str) -> datetime | None:
     return schedule.next_run(cron) or scheduler.next_run(cron)
 
 
+def _piper_voices() -> list[str]:
+    """The Piper voices to offer: those installed, or all of them where Piper is not
+    (then the engine itself is not offered, and the form still needs a valid value)."""
+    return tts.piper_installed_voices() or list(tts.PIPER_VOICES)
+
+
 async def _settings_response() -> Settings:
     sync_cron = await sync.load_cron()
     sync_state = await sync.load_state()
     current = await autogen.load_settings()
     state = await autogen.load_run_state()
     chosen = await jobs.load_tts_settings()
+    piper_voices = _piper_voices()
     return Settings(
         sync=SyncStatus(
             cron=sync_cron,
@@ -375,11 +382,13 @@ async def _settings_response() -> Settings:
             engine=chosen.engine,
             kokoro_voice=chosen.kokoro_voice,
             edge_voice=chosen.edge_voice,
-            piper_voice=chosen.piper_voice,
+            piper_voice=chosen.piper_voice
+            if chosen.piper_voice in piper_voices
+            else piper_voices[0],
             engines=tts.available_engines(),
             kokoro_voices=tts.kokoro_english_voices(),
             edge_voices=list(tts.EDGE_ENGLISH_VOICES),
-            piper_voices=list(tts.PIPER_VOICES),
+            piper_voices=piper_voices,
         ),
     )
 
@@ -406,7 +415,7 @@ async def update_settings(body: SettingsUpdate):
             errors["tts.kokoroVoice"] = ["Not a known English Kokoro voice"]
         if choice.edge_voice not in tts.EDGE_ENGLISH_VOICES:
             errors["tts.edgeVoice"] = ["Not an offered edge-tts voice"]
-        if choice.piper_voice not in tts.PIPER_VOICES:
+        if choice.piper_voice not in _piper_voices():
             errors["tts.piperVoice"] = ["Not an offered Piper voice"]
     if errors:
         return problem(422, "Validation failed", "Some settings are not valid.", errors)

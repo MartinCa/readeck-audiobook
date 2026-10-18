@@ -153,6 +153,7 @@ export function BookmarkCard({
                   )}
                   {bookmark.audio && (
                     <DropdownMenuItem
+                      variant="destructive"
                       className="min-h-11 sm:min-h-0"
                       onClick={() => setConfirmDeleteAudio(true)}
                     >

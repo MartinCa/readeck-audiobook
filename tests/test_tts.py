@@ -119,7 +119,12 @@ class TestResolvePiper:
         directory, model = tts.PIPER_VOICES["ryan-high"]
         (tmp_path / directory).mkdir()
         (tmp_path / directory / model).write_bytes(b"onnx")
+        # The model alone is a partial extraction: tokens and espeak-ng data are needed too.
+        assert not tts.piper_available()
+        (tmp_path / directory / "tokens.txt").write_text("tokens")
+        (tmp_path / directory / "espeak-ng-data").mkdir()
         assert tts.piper_available()
+        assert tts.piper_installed_voices() == ["ryan-high"]
         assert "piper" in tts.available_engines()
 
 

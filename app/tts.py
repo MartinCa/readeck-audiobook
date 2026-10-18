@@ -102,12 +102,23 @@ def kokoro_available() -> bool:
     )
 
 
+def _piper_voice_files(voice: str) -> tuple[Path, Path, Path]:
+    """Where a Piper voice's model, tokens and espeak-ng data should be."""
+    directory, model = PIPER_VOICES[voice]
+    root = config.PIPER_MODEL_DIR / directory
+    return root / model, root / "tokens.txt", root / "espeak-ng-data"
+
+
+def piper_installed_voices() -> list[str]:
+    """The Piper voices whose files are all present, in the order of PIPER_VOICES."""
+    return [
+        voice for voice in PIPER_VOICES if all(path.exists() for path in _piper_voice_files(voice))
+    ]
+
+
 def piper_available() -> bool:
-    """Whether this image has sherpa-onnx and at least one bundled Piper voice."""
-    return importlib.util.find_spec("sherpa_onnx") is not None and any(
-        (config.PIPER_MODEL_DIR / directory / model).is_file()
-        for directory, model in PIPER_VOICES.values()
-    )
+    """Whether this image has sherpa-onnx and at least one complete Piper voice."""
+    return importlib.util.find_spec("sherpa_onnx") is not None and bool(piper_installed_voices())
 
 
 def available_engines() -> list[str]:
@@ -828,19 +839,14 @@ async def synthesize_kokoro(
 
 def _piper_files(voice: str) -> tuple[Path, Path, Path]:
     """The model, tokens and espeak-ng data of a Piper voice, checked to exist."""
-    try:
-        directory, model = PIPER_VOICES[voice]
-    except KeyError:
-        raise ValueError(
-            f"Unknown Piper voice {voice!r}. Voices: {', '.join(PIPER_VOICES)}"
-        ) from None
-    root = config.PIPER_MODEL_DIR / directory
-    files = (root / model, root / "tokens.txt", root / "espeak-ng-data")
+    if voice not in PIPER_VOICES:
+        raise ValueError(f"Unknown Piper voice {voice!r}. Voices: {', '.join(PIPER_VOICES)}")
+    files = _piper_voice_files(voice)
     for path in files:
         if not path.exists():
             raise RuntimeError(
                 f"Piper model file {path} is missing. PIPER_MODEL_DIR should hold the "
-                f"extracted sherpa-onnx voice directory {directory!r}."
+                f"extracted sherpa-onnx voice directory {PIPER_VOICES[voice][0]!r}."
             )
     return files
 
