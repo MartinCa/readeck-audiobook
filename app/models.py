@@ -218,6 +218,17 @@ async def get_jobs(job_ids: list[str]) -> list[dict]:
 _ORDER_BY = "ORDER BY created_at DESC, rowid DESC"
 
 
+# The Jobs page reads as a queue: what is running now, then what the worker
+# takes next (oldest pending first, as in claim_next_pending_job), then failures
+# newest first. Only meaningful for the open statuses.
+_QUEUE_ORDER_BY = (
+    "ORDER BY CASE status WHEN 'processing' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, "
+    "CASE WHEN status = 'failed' THEN NULL ELSE created_at END, "
+    "CASE WHEN status = 'failed' THEN created_at END DESC, "
+    "CASE WHEN status = 'failed' THEN -rowid ELSE rowid END"
+)
+
+
 def _status_filter(statuses: tuple[str, ...] | None) -> tuple[str, tuple]:
     if not statuses:
         return "", ()
@@ -225,16 +236,27 @@ def _status_filter(statuses: tuple[str, ...] | None) -> tuple[str, tuple]:
 
 
 async def list_jobs(
-    limit: int = 50, offset: int = 0, statuses: tuple[str, ...] | None = None
+    limit: int = 50,
+    offset: int = 0,
+    statuses: tuple[str, ...] | None = None,
+    queue_order: bool = False,
 ) -> tuple[list[dict], int]:
-    """Return (jobs, total_count) with pagination, optionally only some statuses."""
+    """Return (jobs, total_count) with pagination, optionally only some statuses.
+
+    Newest first, or with `queue_order` only the open jobs (`statuses` is
+    ignored): running first, then pending in the order the worker takes them,
+    then failed newest first.
+    """
+    if queue_order:
+        statuses = OPEN_STATUSES
     where, params = _status_filter(statuses)
+    order = _QUEUE_ORDER_BY if queue_order else _ORDER_BY
     async with _connect() as db:
         async with db.execute(f"SELECT COUNT(*) FROM jobs {where}", params) as cur:
             row = await cur.fetchone()
             total = row[0] if row else 0
         async with db.execute(
-            f"SELECT * FROM jobs {where} {_ORDER_BY} LIMIT ? OFFSET ?",
+            f"SELECT * FROM jobs {where} {order} LIMIT ? OFFSET ?",
             (*params, limit, max(0, offset)),
         ) as cur:
             rows = await cur.fetchall()

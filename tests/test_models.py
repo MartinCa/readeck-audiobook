@@ -517,6 +517,24 @@ async def test_open_statuses_leave_out_completed():
     assert await models.list_job_ids(statuses=models.OPEN_STATUSES) == [pending["id"]]
 
 
+async def test_queue_order_puts_running_first_then_next_up():
+    old_failed = await _job("f1", JobStatus.failed)
+    first = await _job("a")
+    second = await _job("b")
+    running = await _job("c", JobStatus.processing)
+    new_failed = await _job("f2", JobStatus.failed)
+    await _job("done", JobStatus.completed, "done.mp3")
+    jobs, total = await models.list_jobs(queue_order=True)
+    assert total == 5
+    assert [j["id"] for j in jobs] == [
+        running["id"],
+        first["id"],
+        second["id"],
+        new_failed["id"],
+        old_failed["id"],
+    ]
+
+
 async def test_auto_exclusion():
     await models.set_auto_excluded(["a", "b", "a"], True)
     assert await models.auto_excluded_ids() == {"a", "b"}
