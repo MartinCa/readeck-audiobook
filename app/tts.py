@@ -116,6 +116,16 @@ def piper_installed_voices() -> list[str]:
     ]
 
 
+def usable_piper_voice(voice: str) -> str:
+    """`voice` if it is installed, else the first installed voice.
+
+    Where no voice is installed (Piper is not offered there) the name comes back
+    unchanged, so a job still names the voice that was asked for.
+    """
+    installed = piper_installed_voices()
+    return voice if not installed or voice in installed else installed[0]
+
+
 def piper_available() -> bool:
     """Whether this image has sherpa-onnx and at least one complete Piper voice."""
     return importlib.util.find_spec("sherpa_onnx") is not None and bool(piper_installed_voices())
@@ -173,7 +183,7 @@ def resolve_engine_and_voice(
     if wanted == ENGINE_KOKORO and base in KOKORO_SUPPORTED_LANGS:
         return ENGINE_KOKORO, kokoro_voice or config.KOKORO_VOICE
     if wanted == ENGINE_PIPER and base in PIPER_SUPPORTED_LANGS:
-        return ENGINE_PIPER, piper_voice or config.PIPER_VOICE
+        return ENGINE_PIPER, usable_piper_voice(piper_voice or config.PIPER_VOICE)
     return ENGINE_EDGE, _pick_voice(lang, edge_voice)
 
 

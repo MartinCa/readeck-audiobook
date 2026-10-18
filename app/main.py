@@ -355,7 +355,6 @@ async def _settings_response() -> Settings:
     current = await autogen.load_settings()
     state = await autogen.load_run_state()
     chosen = await jobs.load_tts_settings()
-    piper_voices = _piper_voices()
     return Settings(
         sync=SyncStatus(
             cron=sync_cron,
@@ -382,13 +381,11 @@ async def _settings_response() -> Settings:
             engine=chosen.engine,
             kokoro_voice=chosen.kokoro_voice,
             edge_voice=chosen.edge_voice,
-            piper_voice=chosen.piper_voice
-            if chosen.piper_voice in piper_voices
-            else piper_voices[0],
+            piper_voice=tts.usable_piper_voice(chosen.piper_voice),
             engines=tts.available_engines(),
             kokoro_voices=tts.kokoro_english_voices(),
             edge_voices=list(tts.EDGE_ENGLISH_VOICES),
-            piper_voices=piper_voices,
+            piper_voices=_piper_voices(),
         ),
     )
 

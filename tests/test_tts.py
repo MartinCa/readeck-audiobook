@@ -109,6 +109,19 @@ class TestResolvePiper:
         monkeypatch.setattr(tts.config, "PIPER_VOICE", "ryan-high")
         assert tts.resolve_engine_and_voice("en", "piper") == ("piper", "ryan-high")
 
+    def test_a_voice_that_is_not_installed_is_replaced_by_one_that_is(self, tmp_path, monkeypatch):
+        """On a partial install the queue path must agree with what Settings shows."""
+        monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path)
+        directory, model = tts.PIPER_VOICES["ryan-high"]
+        (tmp_path / directory / "espeak-ng-data").mkdir(parents=True)
+        (tmp_path / directory / model).write_bytes(b"onnx")
+        (tmp_path / directory / "tokens.txt").write_text("tokens")
+        assert tts.resolve_engine_and_voice("en", "piper", piper_voice="lessac-high") == (
+            "piper",
+            "ryan-high",
+        )
+        assert tts.resolve_engine_and_voice("en", "piper") == ("piper", "ryan-high")
+
     def test_other_languages_fall_back_to_edge_tts(self):
         assert tts.resolve_engine_and_voice("de", "piper") == ("edge-tts", "de-DE-KatjaNeural")
 
