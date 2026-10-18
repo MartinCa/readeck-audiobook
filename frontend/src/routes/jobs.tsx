@@ -100,7 +100,7 @@ function JobsPage() {
         Audio that is queued, being generated, or failed. Finished audio is on its bookmark.
       </p>
 
-      {jobs.isPending || clamping ? (
+      {jobs.isPending || (clamping && !jobs.isError) ? (
         <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading jobs">
           {Array.from({ length: 3 }, (_, i) => (
             <Skeleton key={i} className="h-16 w-full rounded-xl" />

@@ -88,7 +88,7 @@ function BookmarksPage() {
         />
       )}
 
-      {bookmarks.isPending || clamping ? (
+      {bookmarks.isPending || (clamping && !bookmarks.isError) ? (
         <BookmarkListSkeleton />
       ) : bookmarks.isError ? (
         <ErrorState
