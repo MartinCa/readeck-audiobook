@@ -343,12 +343,25 @@ def _next_run(schedule: scheduler.Schedule, cron: str) -> datetime | None:
     return schedule.next_run(cron) or scheduler.next_run(cron)
 
 
+def _piper_voices() -> list[str]:
+    """The Piper voices to offer: those installed, or all of them where Piper is not
+    (then the engine itself is not offered, and the form still needs a valid value)."""
+    return tts.piper_installed_voices() or list(tts.PIPER_VOICES)
+
+
 async def _settings_response() -> Settings:
     sync_cron = await sync.load_cron()
     sync_state = await sync.load_state()
     current = await autogen.load_settings()
     state = await autogen.load_run_state()
     chosen = await jobs.load_tts_settings()
+    piper_voices = _piper_voices()
+    # The form sends this back on every save, so it must be one it can offer. An
+    # unknown name (a typo in PIPER_VOICE) is shown as the first offered voice
+    # here; a job queued with it still fails, naming the valid voices.
+    piper_voice = tts.usable_piper_voice(chosen.piper_voice)
+    if piper_voice not in piper_voices:
+        piper_voice = piper_voices[0]
     return Settings(
         sync=SyncStatus(
             cron=sync_cron,
@@ -375,9 +388,11 @@ async def _settings_response() -> Settings:
             engine=chosen.engine,
             kokoro_voice=chosen.kokoro_voice,
             edge_voice=chosen.edge_voice,
+            piper_voice=piper_voice,
             engines=tts.available_engines(),
             kokoro_voices=tts.kokoro_english_voices(),
             edge_voices=list(tts.EDGE_ENGLISH_VOICES),
+            piper_voices=piper_voices,
         ),
     )
 
@@ -404,6 +419,8 @@ async def update_settings(body: SettingsUpdate):
             errors["tts.kokoroVoice"] = ["Not a known English Kokoro voice"]
         if choice.edge_voice not in tts.EDGE_ENGLISH_VOICES:
             errors["tts.edgeVoice"] = ["Not an offered edge-tts voice"]
+        if choice.piper_voice not in _piper_voices():
+            errors["tts.piperVoice"] = ["Not an offered Piper voice"]
     if errors:
         return problem(422, "Validation failed", "Some settings are not valid.", errors)
     if sync_cron is not None:
@@ -416,7 +433,9 @@ async def update_settings(body: SettingsUpdate):
         await jobs.save_min_article_words(body.generation.min_article_words)
     if choice is not None:
         await jobs.save_tts_settings(
-            jobs.TtsSettings(choice.engine, choice.kokoro_voice, choice.edge_voice)
+            jobs.TtsSettings(
+                choice.engine, choice.kokoro_voice, choice.edge_voice, choice.piper_voice
+            )
         )
     return await _settings_response()
 

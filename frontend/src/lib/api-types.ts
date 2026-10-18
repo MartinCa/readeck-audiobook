@@ -585,6 +585,8 @@ export interface components {
       engine: string;
       /** Kokorovoice */
       kokoroVoice: string;
+      /** Pipervoice */
+      piperVoice: string;
     };
     /**
      * TtsStatus
@@ -603,6 +605,10 @@ export interface components {
       kokoroVoice: string;
       /** Kokorovoices */
       kokoroVoices: string[];
+      /** Pipervoice */
+      piperVoice: string;
+      /** Pipervoices */
+      piperVoices: string[];
     };
     /** ValidationError */
     ValidationError: {

@@ -98,6 +98,61 @@ class TestWithRetries:
         assert len(calls) == 1
 
 
+class TestResolvePiper:
+    def test_piper_for_english_with_the_chosen_voice(self):
+        assert tts.resolve_engine_and_voice("en-US", "piper", piper_voice="ryan-high") == (
+            "piper",
+            "ryan-high",
+        )
+
+    def test_the_default_voice_comes_from_the_environment(self, monkeypatch):
+        monkeypatch.setattr(tts.config, "PIPER_VOICE", "ryan-high")
+        assert tts.resolve_engine_and_voice("en", "piper") == ("piper", "ryan-high")
+
+    def test_a_voice_that_is_not_installed_is_replaced_by_one_that_is(self, tmp_path, monkeypatch):
+        """On a partial install the queue path must agree with what Settings shows."""
+        monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path)
+        directory, model = tts.PIPER_VOICES["ryan-high"]
+        (tmp_path / directory / "espeak-ng-data").mkdir(parents=True)
+        (tmp_path / directory / model).write_bytes(b"onnx")
+        (tmp_path / directory / "tokens.txt").write_text("tokens")
+        assert tts.resolve_engine_and_voice("en", "piper", piper_voice="lessac-high") == (
+            "piper",
+            "ryan-high",
+        )
+        assert tts.resolve_engine_and_voice("en", "piper") == ("piper", "ryan-high")
+
+    def test_a_typo_is_not_replaced_even_when_voices_are_installed(self, tmp_path, monkeypatch):
+        """Only a known voice the image lacks is swapped; a typo must fail loudly."""
+        monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path)
+        directory, model = tts.PIPER_VOICES["ryan-high"]
+        (tmp_path / directory / "espeak-ng-data").mkdir(parents=True)
+        (tmp_path / directory / model).write_bytes(b"onnx")
+        (tmp_path / directory / "tokens.txt").write_text("tokens")
+        assert tts.resolve_engine_and_voice("en", "piper", piper_voice="nobody") == (
+            "piper",
+            "nobody",
+        )
+
+    def test_other_languages_fall_back_to_edge_tts(self):
+        assert tts.resolve_engine_and_voice("de", "piper") == ("edge-tts", "de-DE-KatjaNeural")
+
+    def test_piper_is_available_with_sherpa_and_a_voice_on_disk(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path)
+        monkeypatch.setattr(tts.importlib.util, "find_spec", lambda name: object())
+        assert not tts.piper_available()
+        directory, model = tts.PIPER_VOICES["ryan-high"]
+        (tmp_path / directory).mkdir()
+        (tmp_path / directory / model).write_bytes(b"onnx")
+        # The model alone is a partial extraction: tokens and espeak-ng data are needed too.
+        assert not tts.piper_available()
+        (tmp_path / directory / "tokens.txt").write_text("tokens")
+        (tmp_path / directory / "espeak-ng-data").mkdir()
+        assert tts.piper_available()
+        assert tts.piper_installed_voices() == ["ryan-high"]
+        assert "piper" in tts.available_engines()
+
+
 class TestResolveRemovedEngine:
     def test_a_saved_voxtral_choice_falls_back_to_edge_tts(self):
         """Voxtral was removed; a setting saved while it existed must not break queueing."""
@@ -919,3 +974,120 @@ def test_audio_duration_of_an_unreadable_file_is_none(tmp_path):
     path = tmp_path / "x.mp3"
     path.write_bytes(b"not audio")
     assert tts.audio_duration(path) is None
+
+
+@pytest.fixture
+def fake_piper(monkeypatch, tmp_path):
+    """sherpa_onnx and soundfile stubbed, and a Piper voice directory on disk."""
+    seen = {"generated": [], "writes": []}
+    monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path / "piper")
+    for directory, model in tts.PIPER_VOICES.values():
+        root = tmp_path / "piper" / directory
+        (root / "espeak-ng-data").mkdir(parents=True)
+        (root / model).write_bytes(b"onnx")
+        (root / "tokens.txt").write_text("tokens")
+
+    class FakeAudio:
+        samples = [0.0, 0.1, -0.1]
+        sample_rate = 22050
+
+    class FakeEngine:
+        def __init__(self, cfg):
+            seen["config"] = cfg
+
+        def generate(self, text, gen_config):
+            seen["generated"].append(text)
+            seen["sid"] = gen_config.sid
+            return seen.get("audio", FakeAudio())
+
+    sherpa = types.ModuleType("sherpa_onnx")
+    sherpa.GenerationConfig = type("GenerationConfig", (), {})
+    sherpa.OfflineTts = FakeEngine
+    sherpa.OfflineTtsConfig = lambda model: types.SimpleNamespace(model=model)
+    sherpa.OfflineTtsModelConfig = lambda **kw: types.SimpleNamespace(**kw)
+    sherpa.OfflineTtsVitsModelConfig = lambda **kw: types.SimpleNamespace(**kw)
+
+    class FakeSoundFile:
+        def __init__(self, path, mode, samplerate, channels, subtype):
+            seen["wav"] = (samplerate, channels, subtype)
+            Path(path).write_bytes(b"wav")
+
+        def write(self, samples):
+            seen["writes"].append(samples)
+
+        def close(self):
+            seen["closed"] = True
+
+    soundfile = types.ModuleType("soundfile")
+    soundfile.SoundFile = FakeSoundFile
+
+    def fake_run(cmd, capture_output=False):
+        seen["ffmpeg"] = cmd
+        Path(cmd[-1]).write_bytes(b"mp3")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", sherpa)
+    monkeypatch.setitem(sys.modules, "soundfile", soundfile)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return seen
+
+
+class TestSynthesizePiper:
+    """The sherpa-onnx wiring for Piper, with the model itself stubbed."""
+
+    async def test_loads_the_chosen_voice_on_the_cpu(self, tmp_path, fake_piper):
+        out = tmp_path / "out.mp3"
+        await tts.synthesize_piper("Hello world", out, "ryan-high")
+        model = fake_piper["config"].model
+        assert model.provider == "cpu"
+        assert model.vits.model.endswith("vits-piper-en_US-ryan-high/en_US-ryan-high.onnx")
+        assert model.vits.tokens.endswith("vits-piper-en_US-ryan-high/tokens.txt")
+        assert model.vits.data_dir.endswith("vits-piper-en_US-ryan-high/espeak-ng-data")
+        assert fake_piper["sid"] == 0
+        assert out.read_bytes() == b"mp3"
+
+    async def test_uses_the_default_voice_when_none_is_given(self, tmp_path, fake_piper):
+        await tts.synthesize_piper("Hello world", tmp_path / "out.mp3", "")
+        assert "lessac-high" in fake_piper["config"].model.vits.model
+
+    async def test_uses_the_sample_rate_the_engine_reports(self, tmp_path, fake_piper):
+        await tts.synthesize_piper("Hello world", tmp_path / "out.mp3", "lessac-high")
+        assert fake_piper["wav"] == (22050, 1, "PCM_16")
+
+    async def test_long_text_is_synthesized_in_pieces_and_progress_reported(
+        self, tmp_path, fake_piper, monkeypatch
+    ):
+        monkeypatch.setattr(tts.config, "TTS_CHUNK_CHARS", 200)
+        text = "\n\n".join(f"Paragraph number {i} with enough words." * 3 for i in range(10))
+        seen = []
+
+        async def record(done, total):
+            seen.append((done, total))
+
+        await tts.synthesize_piper(text, tmp_path / "out.mp3", "lessac-high", record)
+        await asyncio.sleep(0)
+        total = len(fake_piper["generated"])
+        assert total > 1 and all(len(c) <= 200 for c in fake_piper["generated"])
+        assert len(fake_piper["writes"]) == total and fake_piper["closed"] is True
+        assert sorted(seen) == [(n, total) for n in range(total + 1)]
+
+    async def test_an_unknown_voice_fails_with_the_valid_ones(self, tmp_path, fake_piper):
+        with pytest.raises(ValueError, match="Unknown Piper voice 'nobody'.*lessac-high"):
+            await tts.synthesize_piper("Hi", tmp_path / "out.mp3", "nobody")
+
+    async def test_a_missing_model_file_names_it(self, tmp_path, fake_piper):
+        (tts.config.PIPER_MODEL_DIR / "vits-piper-en_US-lessac-high" / "tokens.txt").unlink()
+        with pytest.raises(RuntimeError, match="tokens.txt is missing"):
+            await tts.synthesize_piper("Hi", tmp_path / "out.mp3", "lessac-high")
+
+    async def test_silent_output_is_an_error(self, tmp_path, fake_piper):
+        fake_piper["audio"] = types.SimpleNamespace(samples=[], sample_rate=22050)
+        with pytest.raises(RuntimeError, match="Piper produced no audio for chunk 1/1"):
+            await tts.synthesize_piper("Hi", tmp_path / "out.mp3", "lessac-high")
+
+    async def test_generate_audio_dispatches_piper_jobs(self, tmp_path, fake_piper, monkeypatch):
+        monkeypatch.setattr(tts, "AUDIO_DIR", tmp_path)
+        monkeypatch.setattr(tts, "_tag_mp3", lambda *a, **k: None)
+        path = await tts.generate_audio("job1", "Hello world", engine="piper", voice="ryan-high")
+        assert "ryan-high" in fake_piper["config"].model.vits.model
+        assert path.read_bytes() == b"mp3"

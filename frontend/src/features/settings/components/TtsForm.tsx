@@ -16,6 +16,7 @@ import type { TtsStatus } from "@/lib/types";
 const engineNames: Record<string, string> = {
   "edge-tts": "edge-tts (Microsoft online)",
   kokoro: "Kokoro (local)",
+  piper: "Piper (local)",
 };
 
 // One line on what each engine is, shown under the choice.
@@ -23,11 +24,14 @@ const engineNotes: Record<string, string> = {
   "edge-tts":
     "Microsoft's cloud voices over an unofficial endpoint: your article text is sent to Microsoft, and it can break without notice.",
   kokoro: "Small model on your own machine. Fast, and nothing leaves the server.",
+  piper:
+    "Piper voices on your own machine's CPU. Fast, and nothing leaves the server. The ryan voice is licensed for non-commercial use (CC BY-NC-SA 4.0).",
 };
 
 // What a deployment needs before an engine is offered. edge-tts is always there.
 const engineRequirements: Record<string, string> = {
   kokoro: "Kokoro needs the Kokoro image",
+  piper: "Piper needs the Kokoro image",
 };
 
 const toItems = (values: string[], labels: Record<string, string> = {}) =>
@@ -71,13 +75,14 @@ export function TtsForm({ status }: { status: TtsStatus }) {
   const [engine, setEngine] = useState(status.engine);
   const [kokoroVoice, setKokoroVoice] = useState(status.kokoroVoice);
   const [edgeVoice, setEdgeVoice] = useState(status.edgeVoice);
+  const [piperVoice, setPiperVoice] = useState(status.piperVoice);
   const engineItems = toItems(status.engines, engineNames);
   const unavailable = Object.keys(engineRequirements).filter((e) => !status.engines.includes(e));
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     save.mutate(
-      { tts: { engine, kokoroVoice, edgeVoice } },
+      { tts: { engine, kokoroVoice, edgeVoice, piperVoice } },
       {
         onSuccess: () => notifications.success("Settings saved"),
         onError: (error) =>
@@ -129,6 +134,14 @@ export function TtsForm({ status }: { status: TtsStatus }) {
               value={kokoroVoice}
               values={status.kokoroVoices}
               onChange={setKokoroVoice}
+            />
+          ) : engine === "piper" ? (
+            <VoiceSelect
+              id="piper-voice"
+              label="Piper voice"
+              value={piperVoice}
+              values={status.piperVoices}
+              onChange={setPiperVoice}
             />
           ) : (
             <VoiceSelect

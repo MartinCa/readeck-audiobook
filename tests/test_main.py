@@ -810,14 +810,18 @@ async def test_health_stays_open_for_container_healthchecks(client, with_auth):
 
 async def test_tts_settings_default_to_the_environment_and_can_be_changed(client, monkeypatch):
     monkeypatch.setattr(tts, "kokoro_available", lambda: True)
+    monkeypatch.setattr(tts, "piper_available", lambda: True)
     body = (await client.get("/api/settings")).json()["tts"]
     assert body["engine"] == "edge-tts"
-    assert body["engines"] == ["edge-tts", "kokoro"]
+    assert body["engines"] == ["edge-tts", "kokoro", "piper"]
     assert "af_heart" in body["kokoroVoices"]
+    assert body["piperVoices"] == ["lessac-high", "ryan-high"]
+    assert body["piperVoice"] == "lessac-high"
     choice = {
-        "engine": "kokoro",
+        "engine": "piper",
         "kokoroVoice": "bf_emma",
         "edgeVoice": "en-GB-SoniaNeural",
+        "piperVoice": "ryan-high",
     }
     resp = await client.put("/api/settings", json={"tts": choice})
     assert resp.status_code == 200
@@ -829,10 +833,64 @@ async def test_tts_settings_reject_an_unavailable_engine_or_unknown_voice(client
     monkeypatch.setattr(tts, "kokoro_available", lambda: False)
     resp = await client.put(
         "/api/settings",
-        json={"tts": {"engine": "kokoro", "kokoroVoice": "nope", "edgeVoice": "en-US-AriaNeural"}},
+        json={
+            "tts": {
+                "engine": "kokoro",
+                "kokoroVoice": "nope",
+                "edgeVoice": "en-US-AriaNeural",
+                "piperVoice": "nobody",
+            }
+        },
     )
     assert resp.status_code == 422
-    assert set(resp.json()["errors"]) == {"tts.engine", "tts.kokoroVoice"}
+    assert set(resp.json()["errors"]) == {"tts.engine", "tts.kokoroVoice", "tts.piperVoice"}
+
+
+async def test_only_installed_piper_voices_are_offered(client, tmp_path, monkeypatch):
+    """A custom image with one voice must not offer the other, nor default to it."""
+    monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path)
+    monkeypatch.setattr(tts.importlib.util, "find_spec", lambda name: object())
+    directory, model = tts.PIPER_VOICES["ryan-high"]
+    (tmp_path / directory / "espeak-ng-data").mkdir(parents=True)
+    (tmp_path / directory / model).write_bytes(b"onnx")
+    (tmp_path / directory / "tokens.txt").write_text("tokens")
+
+    body = (await client.get("/api/settings")).json()["tts"]
+    assert "piper" in body["engines"]
+    assert body["piperVoices"] == ["ryan-high"]
+    # The saved default (lessac-high) is not installed, so the form gets one that is.
+    assert body["piperVoice"] == "ryan-high"
+
+    choice = {"engine": "edge-tts", "kokoroVoice": "af_heart", "edgeVoice": "en-US-AriaNeural"}
+    resp = await client.put("/api/settings", json={"tts": {**choice, "piperVoice": "lessac-high"}})
+    assert resp.status_code == 422
+    assert set(resp.json()["errors"]) == {"tts.piperVoice"}
+    resp = await client.put("/api/settings", json={"tts": {**choice, "piperVoice": "ryan-high"}})
+    assert resp.status_code == 200
+
+
+async def test_an_unknown_saved_piper_voice_does_not_block_saving_settings(client):
+    """A typo in PIPER_VOICE, on an image without Piper voices, must not lock the form."""
+    await models.set_settings({"piper_voice": "nobody"})
+    body = (await client.get("/api/settings")).json()["tts"]
+    assert body["piperVoice"] in body["piperVoices"]
+    resp = await client.put(
+        "/api/settings",
+        json={
+            "tts": {
+                "engine": "edge-tts",
+                "kokoroVoice": body["kokoroVoice"],
+                "edgeVoice": body["edgeVoice"],
+                "piperVoice": body["piperVoice"],
+            }
+        },
+    )
+    assert resp.status_code == 200
+
+
+async def test_piper_is_only_offered_where_its_voices_are_installed(client, monkeypatch):
+    monkeypatch.setattr(tts, "piper_available", lambda: False)
+    assert "piper" not in (await client.get("/api/settings")).json()["tts"]["engines"]
 
 
 async def test_an_engine_that_was_removed_cannot_be_chosen(client):
@@ -843,6 +901,7 @@ async def test_an_engine_that_was_removed_cannot_be_chosen(client):
                 "engine": "voxtral",
                 "kokoroVoice": "af_heart",
                 "edgeVoice": "en-US-AriaNeural",
+                "piperVoice": "lessac-high",
             }
         },
     )
