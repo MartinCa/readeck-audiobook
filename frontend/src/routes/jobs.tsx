@@ -14,6 +14,7 @@ import { JobCard } from "@/features/jobs/components/JobCard";
 import { useDeleteJobs, useJobs, useRetryJobs } from "@/features/jobs/hooks";
 import { plural } from "@/lib/format";
 import { notifications } from "@/lib/notifications";
+import { useClampPage } from "@/lib/use-clamp-page";
 
 const jobsSearchSchema = z.object({
   page: z.number().int().min(1).optional().catch(undefined),
@@ -32,6 +33,12 @@ function JobsPage() {
   const retryMany = useRetryJobs();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useClampPage(
+    page,
+    jobs.data?.totalPages,
+    (last) => void navigate({ search: { page: last > 1 ? last : undefined }, replace: true }),
+  );
 
   const items = jobs.data?.items ?? [];
   const total = jobs.data?.total ?? 0;

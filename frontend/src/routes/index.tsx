@@ -15,6 +15,7 @@ import {
 } from "@/features/bookmarks/filters";
 import { useBookmarks } from "@/features/bookmarks/hooks";
 import { plural } from "@/lib/format";
+import { useClampPage } from "@/lib/use-clamp-page";
 import type { Bookmark } from "@/lib/types";
 
 export const Route = createFileRoute("/")({
@@ -52,6 +53,16 @@ function BookmarksPage() {
       return next;
     });
   }
+
+  useClampPage(
+    search.page ?? 1,
+    bookmarks.data?.totalPages,
+    (last) =>
+      void navigate({
+        search: (prev) => ({ ...prev, page: last > 1 ? last : undefined }),
+        replace: true,
+      }),
+  );
 
   const items = bookmarks.data?.items ?? [];
   // Prefer the freshest copy: polling can add audio to a selected bookmark.
