@@ -9,6 +9,7 @@ import { LinkButton } from "@/components/link-button";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useClampPage } from "@/hooks/use-clamp-page";
 import { jobsApi } from "@/features/jobs/api";
 import { JobCard } from "@/features/jobs/components/JobCard";
 import { useDeleteJobs, useJobs, useRetryJobs } from "@/features/jobs/hooks";
@@ -32,6 +33,12 @@ function JobsPage() {
   const retryMany = useRetryJobs();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const clamping = useClampPage(
+    page,
+    jobs.data,
+    (last) => void navigate({ search: { page: last > 1 ? last : undefined }, replace: true }),
+  );
 
   const items = jobs.data?.items ?? [];
   const total = jobs.data?.total ?? 0;
@@ -93,7 +100,7 @@ function JobsPage() {
         Audio that is queued, being generated, or failed. Finished audio is on its bookmark.
       </p>
 
-      {jobs.isPending ? (
+      {jobs.isPending || (clamping && !jobs.isError) ? (
         <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading jobs">
           {Array.from({ length: 3 }, (_, i) => (
             <Skeleton key={i} className="h-16 w-full rounded-xl" />

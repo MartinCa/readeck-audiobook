@@ -4,6 +4,7 @@ import { ErrorState } from "@/components/ErrorState";
 import { Pagination } from "@/components/Pagination";
 import { LinkButton } from "@/components/link-button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useClampPage } from "@/hooks/use-clamp-page";
 import { BookmarkCard } from "@/features/bookmarks/components/BookmarkCard";
 import { BookmarkFilters } from "@/features/bookmarks/components/BookmarkFilters";
 import { BookmarkListSkeleton } from "@/features/bookmarks/components/BookmarkListSkeleton";
@@ -53,6 +54,16 @@ function BookmarksPage() {
     });
   }
 
+  const clamping = useClampPage(
+    search.page ?? 1,
+    bookmarks.data,
+    (last) =>
+      void navigate({
+        search: (prev) => ({ ...prev, page: last > 1 ? last : undefined }),
+        replace: true,
+      }),
+  );
+
   const items = bookmarks.data?.items ?? [];
   // Prefer the freshest copy: polling can add audio to a selected bookmark.
   const current = new Map(items.map((b) => [b.id, b]));
@@ -77,7 +88,7 @@ function BookmarksPage() {
         />
       )}
 
-      {bookmarks.isPending ? (
+      {bookmarks.isPending || (clamping && !bookmarks.isError) ? (
         <BookmarkListSkeleton />
       ) : bookmarks.isError ? (
         <ErrorState
