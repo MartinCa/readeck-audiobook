@@ -518,16 +518,20 @@ async def test_open_statuses_leave_out_completed():
 
 
 async def test_queue_order_puts_running_first_then_next_up():
-    failed = await _job("f", JobStatus.failed)
+    old_failed = await _job("f1", JobStatus.failed)
     first = await _job("a")
     second = await _job("b")
     running = await _job("c", JobStatus.processing)
-    jobs, _ = await models.list_jobs(statuses=models.OPEN_STATUSES, queue_order=True)
+    new_failed = await _job("f2", JobStatus.failed)
+    await _job("done", JobStatus.completed, "done.mp3")
+    jobs, total = await models.list_jobs(queue_order=True)
+    assert total == 5
     assert [j["id"] for j in jobs] == [
         running["id"],
         first["id"],
         second["id"],
-        failed["id"],
+        new_failed["id"],
+        old_failed["id"],
     ]
 
 

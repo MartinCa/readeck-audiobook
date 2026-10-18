@@ -219,11 +219,13 @@ _ORDER_BY = "ORDER BY created_at DESC, rowid DESC"
 
 
 # The Jobs page reads as a queue: what is running now, then what the worker
-# takes next (oldest pending first, as in claim_next_job), then failures.
+# takes next (oldest pending first, as in claim_next_pending_job), then failures
+# newest first. Only meaningful for the open statuses.
 _QUEUE_ORDER_BY = (
     "ORDER BY CASE status WHEN 'processing' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, "
     "CASE WHEN status = 'failed' THEN NULL ELSE created_at END, "
-    "created_at DESC, rowid"
+    "CASE WHEN status = 'failed' THEN created_at END DESC, "
+    "CASE WHEN status = 'failed' THEN -rowid ELSE rowid END"
 )
 
 
@@ -241,9 +243,12 @@ async def list_jobs(
 ) -> tuple[list[dict], int]:
     """Return (jobs, total_count) with pagination, optionally only some statuses.
 
-    Newest first, or with `queue_order` running jobs first, then pending in the
-    order the worker takes them, then failed newest first.
+    Newest first, or with `queue_order` only the open jobs (`statuses` is
+    ignored): running first, then pending in the order the worker takes them,
+    then failed newest first.
     """
+    if queue_order:
+        statuses = OPEN_STATUSES
     where, params = _status_filter(statuses)
     order = _QUEUE_ORDER_BY if queue_order else _ORDER_BY
     async with _connect() as db:

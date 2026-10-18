@@ -274,7 +274,6 @@ async def list_jobs(page: int = Query(1, ge=1)):
     rows, total = await models.list_jobs(
         limit=JOBS_PER_PAGE,
         offset=(page - 1) * JOBS_PER_PAGE,
-        statuses=models.OPEN_STATUSES,
         queue_order=True,
     )
     return JobPage(
