@@ -260,6 +260,43 @@ class TestCleanMarkdown:
         assert "Before" in result
         assert "After" in result
 
+    def test_drops_a_pull_quote_repeating_the_paragraph_before(self):
+        """BBC pull quotes: retyped with a capital, no stop and HTML entities."""
+        md = (
+            "Intro.\n\nBut despite the fact that they’ve been standing in the desert for "
+            "millennia, we still don’t really know much about the pyramids’ interiors.\n\n"
+            "Despite the fact that they&rsquo;ve been standing in the desert for millennia, "
+            "we still don&rsquo;t really know much about the pyramids&rsquo; interiors\n\n"
+            "Recently, a team came."
+        )
+        result = _clean_markdown(md)
+        assert result.count("standing in the desert") == 1
+        assert result.startswith("Intro.\n\nBut despite")
+        assert result.endswith("interiors.\n\nRecently, a team came.")
+
+    def test_drops_a_pull_quote_taken_from_the_end_of_a_paragraph(self):
+        md = (
+            "Either way, [National Geographic reports](http://example.com) that the Egyptian "
+            "authorities are already interested in the idea of marketing tourist access to any "
+            "chambers that might be found.\n\n"
+            "Egyptian authorities are already interested in the idea of marketing tourist "
+            "access to any chambers that might be found\n\n"
+            "It’s something that would have to be orchestrated responsibly."
+        )
+        result = _clean_markdown(md)
+        assert result.count("marketing tourist access") == 1
+        assert result.endswith("orchestrated responsibly.")
+
+    def test_keeps_a_short_repeated_paragraph(self):
+        assert _clean_markdown("Never again.\n\nNever again.") == "Never again.\n\nNever again."
+
+    def test_keeps_a_long_paragraph_that_only_shares_a_phrase(self):
+        md = (
+            "The pyramids have stood in the desert for millennia and keep their secrets.\n\n"
+            "Stood in the desert for millennia, yes, but visitors still arrive daily."
+        )
+        assert _clean_markdown(md).count("desert for millennia") == 2
+
     def test_inline_code_keeps_its_contents(self):
         """Dropping the code text left fragments like "Run  to save your work."."""
         result = _clean_markdown("Run `git commit -m msg` to save your work.")

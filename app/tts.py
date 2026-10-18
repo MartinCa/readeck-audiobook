@@ -374,6 +374,31 @@ def count_words(text: str) -> int:
     return len(re.findall(r"\w+", _clean_markdown(body)))
 
 
+# Shorter than this, a repeated paragraph is as likely to be deliberate ("Never
+# again.") as a pull quote.
+_PULL_QUOTE_MIN_WORDS = 8
+
+
+def _drop_pull_quotes(blocks: list[str]) -> list[str]:
+    """Drop a paragraph that only repeats text already read out.
+
+    Publishers such as the BBC print a pull quote, a sentence lifted from the
+    body, as a paragraph of its own beside it. On a page that is emphasis; read
+    aloud it is the same sentence twice. Case, punctuation and entities are
+    ignored since the quote is rarely typeset like the original.
+    """
+    seen = ""
+    kept: list[str] = []
+    for block in blocks:
+        words = re.findall(r"\w+", block.lower())
+        if "\n" not in block and len(words) >= _PULL_QUOTE_MIN_WORDS and "".join(words) in seen:
+            continue
+        kept.append(block)
+        # The separator keeps a match from spanning two paragraphs.
+        seen += "".join(words) + "|"
+    return kept
+
+
 def _clean_markdown(text: str) -> str:
     """Strip Markdown formatting so TTS reads cleaner text."""
     if not text:
@@ -406,7 +431,8 @@ def _clean_markdown(text: str) -> str:
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"[ \t]+(\n)", r"\1", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return "\n\n".join(_end_sentence(block) for block in text.strip().split("\n\n"))
+    blocks = _drop_pull_quotes(text.strip().split("\n\n"))
+    return "\n\n".join(_end_sentence(block) for block in blocks)
 
 
 # ── Chunking ───────────────────────────────────────────────────────────────────
