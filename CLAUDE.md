@@ -4,7 +4,7 @@
 
 A lightweight FastAPI web app that converts [Readeck](https://readeck.org) bookmarks into MP3 audiobooks via text-to-speech. See [README.md](README.md) for full documentation.
 
-**Stack:** Python 3.12+ · FastAPI · SQLite · edge-tts, with a React + TypeScript web UI in `frontend/` built on [MartinCa/frontend-kit](https://github.com/MartinCa/frontend-kit) (shadcn/ui on Base UI, Tailwind, TanStack Router + Query).
+**Stack:** Python 3.14+ · FastAPI · SQLite · edge-tts, with a React + TypeScript web UI in `frontend/` built on [MartinCa/frontend-kit](https://github.com/MartinCa/frontend-kit) (shadcn/ui on Base UI, Tailwind, TanStack Router + Query).
 
 ## Layout notes
 
