@@ -220,7 +220,7 @@ readeck-audiobook/
 
 **Stack:** Python 3.12+ · FastAPI · SQLite · edge-tts — React · TypeScript · Vite · TanStack Router/Query · shadcn/ui (Base UI) · Tailwind, following [MartinCa/frontend-kit](https://github.com/MartinCa/frontend-kit). The Docker images build the web UI in a Node stage and serve it from FastAPI; nothing is fetched from a CDN at runtime.
 
-Both images build on Python 3.14. CI runs the suite on 3.12 (the declared minimum) and 3.14.
+The default image builds on Python 3.15; the Kokoro image stays on 3.14 until sherpa-onnx ships 3.15 wheels. CI runs the suite on 3.12 (the declared minimum), 3.14 and 3.15.
 
 **How a job flows:**
 

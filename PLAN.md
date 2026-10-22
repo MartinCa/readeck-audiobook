@@ -141,7 +141,7 @@ CREATE TABLE jobs (
 ## Docker Setup
 
 ### Dockerfile (multi-stage, slim)
-- Base: `python:3.14-slim`
+- Base: `python:3.15-slim`
 - Install system deps: `ffmpeg` (for audio processing), `ca-certificates`
 - Copy `requirements.txt`, install Python deps
 - Copy app code
