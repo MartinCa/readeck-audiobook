@@ -14,7 +14,7 @@ A lightweight web app that fetches bookmarks from a Readeck instance and generat
 
 ### Tech Stack
 
-- **Backend**: Python 3.12 + FastAPI (async, lightweight, built-in background tasks)
+- **Backend**: Python 3.15 + FastAPI (async, lightweight, built-in background tasks)
 - **Frontend**: Jinja2 templates + HTMX + Alpine.js (server-rendered, minimal JS footprint)
 - **TTS Engine**: `edge-tts` (Microsoft Edge TTS — free, no API key, high quality neural voices)
   - Optional: Kokoro-82M as a higher-quality local neural backend (English only for now)
@@ -141,7 +141,7 @@ CREATE TABLE jobs (
 ## Docker Setup
 
 ### Dockerfile (multi-stage, slim)
-- Base: `python:3.14-slim`
+- Base: `python:3.15-slim`
 - Install system deps: `ffmpeg` (for audio processing), `ca-certificates`
 - Copy `requirements.txt`, install Python deps
 - Copy app code
