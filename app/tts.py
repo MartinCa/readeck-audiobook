@@ -806,6 +806,31 @@ def _wav_to_mp3_command(wav_path: Path, output_path: Path) -> list[str]:
     ]
 
 
+# espeak-ng keeps its voice and text state in process globals and jobs run on
+# parallel worker threads, so phonemizing is serialized.
+_phonemize_lock = threading.Lock()
+_phonemizer_missing_reported = False
+
+
+def _phonemizer():
+    """piper_phonemize's phonemize_espeak, or None where the package is not installed."""
+    try:
+        from piper_phonemize import phonemize_espeak
+    except ImportError:
+        return None
+    return phonemize_espeak
+
+
+def _phonemize(phonemize_espeak, text: str, lang: str) -> list[list[int]]:
+    """The text as the codepoints of its phonemes, one list per sentence.
+
+    Empty when there is nothing to say (text espeak reduces to no phonemes at all).
+    """
+    with _phonemize_lock:
+        sentences = phonemize_espeak(text, lang)
+    return [[ord(char) for char in sentence] for sentence in sentences if sentence]
+
+
 async def synthesize_kokoro(
     text: str, output_path: Path, voice: str = "", on_progress: ProgressCallback | None = None
 ):
@@ -822,10 +847,11 @@ async def synthesize_kokoro(
     import sherpa_onnx
     import soundfile as sf
 
-    try:
-        from piper_phonemize import phonemize_espeak
-    except ImportError:  # a custom image without it: the lexicon alone, words may be skipped
-        phonemize_espeak = None
+    global _phonemizer_missing_reported
+    phonemize_espeak = _phonemizer()
+    if phonemize_espeak is None and not _phonemizer_missing_reported:
+        # A custom image without it: the lexicon alone, so words may be skipped.
+        _phonemizer_missing_reported = True
         logger.warning(
             "piper_phonemize is not installed; Kokoro will skip words missing from its lexicon"
         )
@@ -880,10 +906,12 @@ async def synthesize_kokoro(
                             spoken = chunk
                         else:
                             spoken = ""
-                            gen_config.phoneme_codepoints = [
-                                [ord(char) for char in sentence]
-                                for sentence in phonemize_espeak(chunk, "en-us")
-                            ]
+                            gen_config.phoneme_codepoints = _phonemize(
+                                phonemize_espeak, chunk, "en-us"
+                            )
+                            if not gen_config.phoneme_codepoints:
+                                _report_from_thread(index)  # nothing to say in this piece
+                                continue
                         with _kokoro_lock:
                             audio = engine.generate(spoken, gen_config)
                         if audio.sample_rate <= 0 or len(audio.samples) == 0:
@@ -904,6 +932,8 @@ async def synthesize_kokoro(
                 finally:
                     if writer is not None:
                         writer.close()
+                if writer is None:
+                    raise ValueError("No readable text to synthesize")
 
                 result = subprocess.run(
                     _wav_to_mp3_command(wav_path, output_path), capture_output=True
@@ -949,7 +979,10 @@ async def synthesize_piper(
 
     import sherpa_onnx
     import soundfile as sf
-    from piper_phonemize import phonemize_espeak
+
+    phonemize_espeak = _phonemizer()
+    if phonemize_espeak is None:
+        raise RuntimeError("Piper needs the piper_phonemize package, which is not installed")
 
     voice = voice or config.PIPER_VOICE
     model, tokens = _piper_files(voice)
@@ -992,10 +1025,10 @@ async def synthesize_piper(
             writer = None
             try:
                 for index, chunk in enumerate(chunks, 1):
-                    gen_config.phoneme_codepoints = [
-                        [ord(char) for char in sentence]
-                        for sentence in phonemize_espeak(chunk, lang)
-                    ]
+                    gen_config.phoneme_codepoints = _phonemize(phonemize_espeak, chunk, lang)
+                    if not gen_config.phoneme_codepoints:
+                        _report_from_thread(index)  # nothing to say in this piece
+                        continue
                     audio = engine.generate("", gen_config)
                     if audio.sample_rate <= 0 or len(audio.samples) == 0:
                         raise RuntimeError(
@@ -1015,6 +1048,8 @@ async def synthesize_piper(
             finally:
                 if writer is not None:
                     writer.close()
+            if writer is None:
+                raise ValueError("No readable text to synthesize")
 
             result = subprocess.run(_wav_to_mp3_command(wav_path, output_path), capture_output=True)
             if result.returncode != 0:

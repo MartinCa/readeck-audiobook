@@ -3,6 +3,7 @@
 import asyncio
 import subprocess
 import sys
+import threading
 import time
 import types
 from pathlib import Path
@@ -163,6 +164,37 @@ class TestResolvePiper:
             lambda name: None if name == "piper_phonemize" else object(),
         )
         assert not tts.piper_available()
+
+
+class TestPhonemize:
+    def test_espeak_is_never_entered_by_two_threads_at_once(self):
+        """espeak-ng works on process-global state, so concurrent jobs must queue."""
+        inside = 0
+        overlapped = False
+
+        def fake_espeak(text, lang):
+            nonlocal inside, overlapped
+            inside += 1
+            overlapped = overlapped or inside > 1
+            time.sleep(0.02)
+            inside -= 1
+            return [text]
+
+        threads = [
+            threading.Thread(target=tts._phonemize, args=(fake_espeak, "hi", "en-us"))
+            for _ in range(6)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert not overlapped
+
+    def test_empty_sentences_are_dropped(self):
+        assert tts._phonemize(lambda text, lang: ["ab", "", "c"], "x", "en-us") == [
+            [97, 98],
+            [99],
+        ]
 
 
 class TestResolveRemovedEngine:
@@ -559,11 +591,40 @@ class TestSynthesizeKokoro:
         self, tmp_path, fake_sherpa, monkeypatch, caplog
     ):
         monkeypatch.setitem(sys.modules, "piper_phonemize", None)  # import raises ImportError
+        monkeypatch.setattr(tts, "_phonemizer_missing_reported", False)
         with caplog.at_level("WARNING", logger="app.tts"):
             await tts.synthesize_kokoro("Hello world", tmp_path / "out.mp3", "af_heart")
-        assert fake_sherpa["text"] == "Hello world"
+            await tts.synthesize_kokoro("Hello again", tmp_path / "out.mp3", "af_heart")
+        assert fake_sherpa["text"] == "Hello again"
         assert "lang" not in fake_sherpa
-        assert "piper_phonemize is not installed" in caplog.text
+        assert caplog.text.count("piper_phonemize is not installed") == 1
+
+    async def test_a_piece_with_nothing_to_say_is_skipped(self, tmp_path, fake_sherpa, monkeypatch):
+        monkeypatch.setattr(tts.config, "TTS_CHUNK_CHARS", 40)
+        phonemize = sys.modules["piper_phonemize"].phonemize_espeak
+        monkeypatch.setattr(
+            sys.modules["piper_phonemize"],
+            "phonemize_espeak",
+            lambda text, lang: [] if "silent" in text else phonemize(text, lang),
+        )
+        seen = []
+
+        async def record(done, total):
+            seen.append((done, total))
+
+        text = "Spoken one here.\n\nsilent silent silent silent.\n\nSpoken two here."
+        await tts.synthesize_kokoro(text, tmp_path / "out.mp3", "af_heart", record)
+        await asyncio.sleep(0)
+        assert not any("silent" in piece for piece in fake_sherpa["generated"])
+        assert len(fake_sherpa["generated"]) == 2
+        assert sorted(seen)[-1] == (3, 3)
+
+    async def test_text_that_phonemizes_to_nothing_fails_clearly(
+        self, tmp_path, fake_sherpa, monkeypatch
+    ):
+        monkeypatch.setattr(sys.modules["piper_phonemize"], "phonemize_espeak", lambda t, lang: [])
+        with pytest.raises(ValueError, match="No readable text"):
+            await tts.synthesize_kokoro("Hello", tmp_path / "out.mp3", "af_heart")
 
     async def test_maps_the_voice_name_to_a_speaker_id(self, tmp_path, fake_sherpa):
         await tts.synthesize_kokoro("Hello world", tmp_path / "out.mp3", "am_adam")
@@ -1195,6 +1256,25 @@ class TestSynthesizePiper:
         await tts.synthesize_piper("Hello world", tmp_path / "out.mp3", "lessac-high")
         assert fake_piper["lang"] == "en-us"
         assert fake_piper["generated"] == ["Hello world"]
+
+    async def test_a_piece_with_nothing_to_say_is_skipped(self, tmp_path, fake_piper, monkeypatch):
+        monkeypatch.setattr(tts.config, "TTS_CHUNK_CHARS", 40)
+        phonemize = sys.modules["piper_phonemize"].phonemize_espeak
+        monkeypatch.setattr(
+            sys.modules["piper_phonemize"],
+            "phonemize_espeak",
+            lambda text, lang: [] if "silent" in text else phonemize(text, lang),
+        )
+        text = "Spoken one here.\n\nsilent silent silent silent.\n\nSpoken two here."
+        await tts.synthesize_piper(text, tmp_path / "out.mp3", "lessac-high")
+        assert len(fake_piper["generated"]) == 2
+
+    async def test_text_that_phonemizes_to_nothing_fails_clearly(
+        self, tmp_path, fake_piper, monkeypatch
+    ):
+        monkeypatch.setattr(sys.modules["piper_phonemize"], "phonemize_espeak", lambda t, lang: [])
+        with pytest.raises(ValueError, match="No readable text"):
+            await tts.synthesize_piper("Hello", tmp_path / "out.mp3", "lessac-high")
 
     async def test_uses_the_default_voice_when_none_is_given(self, tmp_path, fake_piper):
         await tts.synthesize_piper("Hello world", tmp_path / "out.mp3", "")
