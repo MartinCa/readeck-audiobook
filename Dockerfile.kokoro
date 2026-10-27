@@ -54,6 +54,10 @@ RUN pip install --no-cache-dir -r requirements-kokoro.txt && \
 # later rather than a failed build — which is exactly how a missing libcurand
 # shipped once already. `ldd` resolves the same libraries without needing a GPU,
 # so this catches it on an ordinary CI runner.
+#
+# libcuda.so.1 is exempt: it is the NVIDIA driver itself, which the container
+# runtime mounts from the host at run time, so no image can ever contain it
+# (sherpa-onnx 2's provider links it directly; 1.x did not).
 RUN if [ "$KOKORO_ACCEL" = "cuda" ]; then \
         SHERPA=$(python -c "import importlib.util, pathlib; print(pathlib.Path(importlib.util.find_spec('sherpa_onnx').origin).parent)") && \
         find "$(dirname "$SHERPA")/nvidia" -type d -name lib > /etc/ld.so.conf.d/nvidia-pip.conf && \
@@ -65,7 +69,7 @@ RUN if [ "$KOKORO_ACCEL" = "cuda" ]; then \
         fi && \
         echo "Checking shared library closure of $PROVIDER" && \
         ldd "$PROVIDER" && \
-        if ldd "$PROVIDER" | grep -q "not found"; then \
+        if ldd "$PROVIDER" | grep -v "libcuda.so.1" | grep -q "not found"; then \
             echo "ERROR: unresolved libraries above — add the matching nvidia-*-cu12 wheel to requirements-kokoro-cuda.txt" >&2; \
             exit 1; \
         fi; \
