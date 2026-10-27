@@ -1,9 +1,6 @@
 # Variant image that bundles the Kokoro-82M TTS model so TTS_ENGINE=kokoro can run
 # speech synthesis in-process instead of edge-tts. Kokoro runs on sherpa-onnx
-# (onnxruntime). sherpa-onnx publishes no CPython 3.15 wheels yet (neither PyPI nor
-# the k2-fsa CUDA index), so this image stays on 3.14 while the default Dockerfile
-# tracks the latest Python; renovate.json keeps Renovate from bumping it past 3.14.
-# Move it up with the default image once 3.15 wheels exist.
+# (onnxruntime), on the same Python as the default Dockerfile.
 #
 # Build with --build-arg KOKORO_ACCEL=cuda for the GPU variant; see
 # requirements-kokoro-cuda.txt.
@@ -24,7 +21,7 @@ RUN pnpm install --frozen-lockfile --ignore-scripts
 COPY frontend/ ./
 RUN pnpm build
 
-FROM docker.io/library/python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
+FROM docker.io/library/python:3.15-slim@sha256:2da676046630d7bf14c6764ae1143dc7fa0377a53f94bf5a642f0b214aca5bce
 
 ARG KOKORO_ACCEL=cpu
 

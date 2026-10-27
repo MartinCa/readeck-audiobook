@@ -113,7 +113,7 @@ class TestResolvePiper:
         """On a partial install the queue path must agree with what Settings shows."""
         monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path)
         directory, model = tts.PIPER_VOICES["ryan-high"]
-        (tmp_path / directory / "espeak-ng-data").mkdir(parents=True)
+        (tmp_path / directory).mkdir(parents=True)
         (tmp_path / directory / model).write_bytes(b"onnx")
         (tmp_path / directory / "tokens.txt").write_text("tokens")
         assert tts.resolve_engine_and_voice("en", "piper", piper_voice="lessac-high") == (
@@ -126,7 +126,7 @@ class TestResolvePiper:
         """Only a known voice the image lacks is swapped; a typo must fail loudly."""
         monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path)
         directory, model = tts.PIPER_VOICES["ryan-high"]
-        (tmp_path / directory / "espeak-ng-data").mkdir(parents=True)
+        (tmp_path / directory).mkdir(parents=True)
         (tmp_path / directory / model).write_bytes(b"onnx")
         (tmp_path / directory / "tokens.txt").write_text("tokens")
         assert tts.resolve_engine_and_voice("en", "piper", piper_voice="nobody") == (
@@ -144,13 +144,25 @@ class TestResolvePiper:
         directory, model = tts.PIPER_VOICES["ryan-high"]
         (tmp_path / directory).mkdir()
         (tmp_path / directory / model).write_bytes(b"onnx")
-        # The model alone is a partial extraction: tokens and espeak-ng data are needed too.
+        # The model alone is a partial extraction: the tokens are needed too.
         assert not tts.piper_available()
         (tmp_path / directory / "tokens.txt").write_text("tokens")
-        (tmp_path / directory / "espeak-ng-data").mkdir()
         assert tts.piper_available()
         assert tts.piper_installed_voices() == ["ryan-high"]
         assert "piper" in tts.available_engines()
+
+    def test_piper_needs_the_phonemizer(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path)
+        directory, model = tts.PIPER_VOICES["ryan-high"]
+        (tmp_path / directory).mkdir()
+        (tmp_path / directory / model).write_bytes(b"onnx")
+        (tmp_path / directory / "tokens.txt").write_text("tokens")
+        monkeypatch.setattr(
+            tts.importlib.util,
+            "find_spec",
+            lambda name: None if name == "piper_phonemize" else object(),
+        )
+        assert not tts.piper_available()
 
 
 class TestResolveRemovedEngine:
@@ -1068,7 +1080,7 @@ def fake_piper(monkeypatch, tmp_path):
     monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path / "piper")
     for directory, model in tts.PIPER_VOICES.values():
         root = tmp_path / "piper" / directory
-        (root / "espeak-ng-data").mkdir(parents=True)
+        root.mkdir(parents=True)
         (root / model).write_bytes(b"onnx")
         (root / "tokens.txt").write_text("tokens")
 
@@ -1077,11 +1089,17 @@ def fake_piper(monkeypatch, tmp_path):
         sample_rate = 22050
 
     class FakeEngine:
+        lang = "en-us"
+
         def __init__(self, cfg):
             seen["config"] = cfg
 
         def generate(self, text, gen_config):
-            seen["generated"].append(text)
+            # sherpa-onnx 2 takes phonemes, not text, so the text must stay empty.
+            assert text == ""
+            seen["generated"].append(
+                "".join(chr(cp) for sentence in gen_config.phoneme_codepoints for cp in sentence)
+            )
             seen["sid"] = gen_config.sid
             return seen.get("audio", FakeAudio())
 
@@ -1091,6 +1109,14 @@ def fake_piper(monkeypatch, tmp_path):
     sherpa.OfflineTtsConfig = lambda model: types.SimpleNamespace(model=model)
     sherpa.OfflineTtsModelConfig = lambda **kw: types.SimpleNamespace(**kw)
     sherpa.OfflineTtsVitsModelConfig = lambda **kw: types.SimpleNamespace(**kw)
+
+    piper_phonemize = types.ModuleType("piper_phonemize")
+
+    def phonemize_espeak(text, lang):
+        seen["lang"] = lang
+        return [text]  # one "sentence" per chunk, phonemes standing in as the text itself
+
+    piper_phonemize.phonemize_espeak = phonemize_espeak
 
     class FakeSoundFile:
         def __init__(self, path, mode, samplerate, channels, subtype):
@@ -1113,6 +1139,7 @@ def fake_piper(monkeypatch, tmp_path):
 
     monkeypatch.setitem(sys.modules, "sherpa_onnx", sherpa)
     monkeypatch.setitem(sys.modules, "soundfile", soundfile)
+    monkeypatch.setitem(sys.modules, "piper_phonemize", piper_phonemize)
     monkeypatch.setattr(subprocess, "run", fake_run)
     return seen
 
@@ -1127,9 +1154,16 @@ class TestSynthesizePiper:
         assert model.provider == "cpu"
         assert model.vits.model.endswith("vits-piper-en_US-ryan-high/en_US-ryan-high.onnx")
         assert model.vits.tokens.endswith("vits-piper-en_US-ryan-high/tokens.txt")
-        assert model.vits.data_dir.endswith("vits-piper-en_US-ryan-high/espeak-ng-data")
+        assert not hasattr(model.vits, "data_dir")  # espeak-ng is gone from sherpa-onnx 2
         assert fake_piper["sid"] == 0
         assert out.read_bytes() == b"mp3"
+
+    async def test_text_is_phonemized_in_the_models_language_and_passed_as_codepoints(
+        self, tmp_path, fake_piper
+    ):
+        await tts.synthesize_piper("Hello world", tmp_path / "out.mp3", "lessac-high")
+        assert fake_piper["lang"] == "en-us"
+        assert fake_piper["generated"] == ["Hello world"]
 
     async def test_uses_the_default_voice_when_none_is_given(self, tmp_path, fake_piper):
         await tts.synthesize_piper("Hello world", tmp_path / "out.mp3", "")
