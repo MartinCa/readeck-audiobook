@@ -149,7 +149,7 @@ The suffix keeps two articles with the same title apart and ties the file back t
 
 [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) is a small (82M parameter) open-weight neural TTS model that runs directly in-process — no separate service, no subprocess orchestration. Quality is noticeably better than edge-tts, and it runs fine on CPU.
 
-It runs on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (onnxruntime), not PyTorch. That keeps the variant image close in size to the default one: no torch, no transformers, no spaCy, and no espeak-ng system package. Kokoro words come from the bundled lexicons; Piper text is phonemized by `piper_phonemize`, whose wheel carries its own espeak-ng (sherpa-onnx 2 no longer does).
+It runs on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (onnxruntime), not PyTorch. That keeps the variant image close in size to the default one: no torch, no transformers, no spaCy, and no espeak-ng system package. English text for both Kokoro and Piper is phonemized by `piper_phonemize`, whose wheel carries its own espeak-ng (sherpa-onnx 2 no longer does, and would otherwise skip any word missing from Kokoro's lexicon).
 
 **Currently English only.** Kokoro only covers a handful of languages; when `TTS_ENGINE=kokoro`, bookmarks in any other language still fall back to edge-tts automatically (same as today).
 

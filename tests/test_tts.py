@@ -491,6 +491,12 @@ def fake_sherpa(monkeypatch):
         num_speakers = len(tts.KOKORO_VOICES)
 
         def generate(self, text, gen_config):
+            codepoints = getattr(gen_config, "phoneme_codepoints", None)
+            if codepoints:
+                # Phonemes go in with empty text; the stub phonemizer returns the
+                # chunk itself as its one "sentence", so it can be read back here.
+                assert text == ""
+                text = "".join(chr(cp) for sentence in codepoints for cp in sentence)
             seen["text"] = text
             seen["sid"] = gen_config.sid
             seen["speed"] = gen_config.speed
@@ -499,6 +505,14 @@ def fake_sherpa(monkeypatch):
 
     sherpa = types.ModuleType("sherpa_onnx")
     sherpa.GenerationConfig = type("GenerationConfig", (), {})
+
+    piper_phonemize = types.ModuleType("piper_phonemize")
+
+    def phonemize_espeak(text, lang):
+        seen["lang"] = lang
+        return [text]
+
+    piper_phonemize.phonemize_espeak = phonemize_espeak
 
     class FakeSoundFile:
         """Stands in for the streaming writer the real code appends to."""
@@ -525,6 +539,7 @@ def fake_sherpa(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "sherpa_onnx", sherpa)
     monkeypatch.setitem(sys.modules, "soundfile", soundfile)
+    monkeypatch.setitem(sys.modules, "piper_phonemize", piper_phonemize)
     monkeypatch.setattr(tts, "_get_kokoro_tts", FakeEngine)
     monkeypatch.setattr(subprocess, "run", fake_run)
     return seen
@@ -533,6 +548,22 @@ def fake_sherpa(monkeypatch):
 class TestSynthesizeKokoro:
     """Covers the sherpa-onnx wiring. sherpa_onnx and soundfile only ship in the
     kokoro image, so both are stubbed — this exercises the plumbing, not the model."""
+
+    async def test_text_is_phonemized_so_no_word_is_skipped(self, tmp_path, fake_sherpa):
+        """sherpa-onnx 2 skips words missing from the lexicon, so it gets phonemes."""
+        await tts.synthesize_kokoro("Kubernetes costs $5", tmp_path / "out.mp3", "af_heart")
+        assert fake_sherpa["lang"] == "en-us"
+        assert fake_sherpa["text"] == "Kubernetes costs $5"
+
+    async def test_without_the_phonemizer_the_text_goes_in_as_is(
+        self, tmp_path, fake_sherpa, monkeypatch, caplog
+    ):
+        monkeypatch.setitem(sys.modules, "piper_phonemize", None)  # import raises ImportError
+        with caplog.at_level("WARNING", logger="app.tts"):
+            await tts.synthesize_kokoro("Hello world", tmp_path / "out.mp3", "af_heart")
+        assert fake_sherpa["text"] == "Hello world"
+        assert "lang" not in fake_sherpa
+        assert "piper_phonemize is not installed" in caplog.text
 
     async def test_maps_the_voice_name_to_a_speaker_id(self, tmp_path, fake_sherpa):
         await tts.synthesize_kokoro("Hello world", tmp_path / "out.mp3", "am_adam")

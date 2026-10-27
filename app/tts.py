@@ -809,12 +809,26 @@ def _wav_to_mp3_command(wav_path: Path, output_path: Path) -> list[str]:
 async def synthesize_kokoro(
     text: str, output_path: Path, voice: str = "", on_progress: ProgressCallback | None = None
 ):
-    """Synthesize speech with the local Kokoro-82M model via sherpa-onnx."""
+    """Synthesize speech with the local Kokoro-82M model via sherpa-onnx.
+
+    Kokoro only runs for English here. sherpa-onnx 2 no longer falls back to
+    espeak-ng for words missing from the lexicon: it skips them, which silently
+    drops names, acronyms and symbols. So where piper_phonemize is installed the
+    text is phonemized here and passed as codepoints, speaking every word.
+    """
     import subprocess
     import tempfile
 
     import sherpa_onnx
     import soundfile as sf
+
+    try:
+        from piper_phonemize import phonemize_espeak
+    except ImportError:  # a custom image without it: the lexicon alone, words may be skipped
+        phonemize_espeak = None
+        logger.warning(
+            "piper_phonemize is not installed; Kokoro will skip words missing from its lexicon"
+        )
 
     voice = voice or config.KOKORO_VOICE
     sid = resolve_kokoro_sid(voice)
@@ -862,8 +876,16 @@ async def synthesize_kokoro(
                 writer = None
                 try:
                     for index, chunk in enumerate(chunks, 1):
+                        if phonemize_espeak is None:
+                            spoken = chunk
+                        else:
+                            spoken = ""
+                            gen_config.phoneme_codepoints = [
+                                [ord(char) for char in sentence]
+                                for sentence in phonemize_espeak(chunk, "en-us")
+                            ]
                         with _kokoro_lock:
-                            audio = engine.generate(chunk, gen_config)
+                            audio = engine.generate(spoken, gen_config)
                         if audio.sample_rate <= 0 or len(audio.samples) == 0:
                             raise RuntimeError(
                                 f"Kokoro produced no audio for chunk {index}/{len(chunks)}"
