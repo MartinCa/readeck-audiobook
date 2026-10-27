@@ -3,5 +3,9 @@
 # torch, transformers or spaCy behind it. Kept out of the default
 # requirements.txt anyway so the base image carries no TTS model machinery.
 -r requirements.txt
-sherpa-onnx==1.13.8
+sherpa-onnx==2.0.1
 soundfile==0.14.0
+# sherpa-onnx 2 dropped espeak-ng, so Piper text is phonemized here. Not on PyPI:
+# k2-fsa publishes the wheels (including CPython 3.15) on this index. GPL licensed.
+--find-links https://k2-fsa.github.io/icefall/piper_phonemize.html
+piper_phonemize==1.5.9

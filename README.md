@@ -149,7 +149,7 @@ The suffix keeps two articles with the same title apart and ties the file back t
 
 [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) is a small (82M parameter) open-weight neural TTS model that runs directly in-process — no separate service, no subprocess orchestration. Quality is noticeably better than edge-tts, and it runs fine on CPU.
 
-It runs on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (onnxruntime), not PyTorch. That keeps the variant image close in size to the default one: no torch, no transformers, no spaCy, and no espeak-ng system package — the model archive bundles its own `espeak-ng-data`.
+It runs on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (onnxruntime), not PyTorch. That keeps the variant image close in size to the default one: no torch, no transformers, no spaCy, and no espeak-ng system package. English text for both Kokoro and Piper is phonemized by `piper_phonemize`, whose wheel carries its own espeak-ng (sherpa-onnx 2 no longer does, and would otherwise skip any word missing from Kokoro's lexicon).
 
 **Currently English only.** Kokoro only covers a handful of languages; when `TTS_ENGINE=kokoro`, bookmarks in any other language still fall back to edge-tts automatically (same as today).
 
@@ -220,7 +220,7 @@ readeck-audiobook/
 
 **Stack:** Python 3.14+ · FastAPI · SQLite · edge-tts — React · TypeScript · Vite · TanStack Router/Query · shadcn/ui (Base UI) · Tailwind, following [MartinCa/frontend-kit](https://github.com/MartinCa/frontend-kit). The Docker images build the web UI in a Node stage and serve it from FastAPI; nothing is fetched from a CDN at runtime.
 
-The default image builds on Python 3.15; the Kokoro image stays on 3.14 until sherpa-onnx ships 3.15 wheels. CI runs the suite on 3.14 (the Kokoro image) and 3.15 (the default image).
+Both images build on Python 3.15, and CI runs the suite on it.
 
 **How a job flows:**
 

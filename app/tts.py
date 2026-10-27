@@ -102,11 +102,11 @@ def kokoro_available() -> bool:
     )
 
 
-def _piper_voice_files(voice: str) -> tuple[Path, Path, Path]:
-    """Where a Piper voice's model, tokens and espeak-ng data should be."""
+def _piper_voice_files(voice: str) -> tuple[Path, Path]:
+    """Where a Piper voice's model and tokens should be."""
     directory, model = PIPER_VOICES[voice]
     root = config.PIPER_MODEL_DIR / directory
-    return root / model, root / "tokens.txt", root / "espeak-ng-data"
+    return root / model, root / "tokens.txt"
 
 
 def piper_installed_voices() -> list[str]:
@@ -132,8 +132,12 @@ def usable_piper_voice(voice: str) -> str:
 
 
 def piper_available() -> bool:
-    """Whether this image has sherpa-onnx and at least one complete Piper voice."""
-    return importlib.util.find_spec("sherpa_onnx") is not None and bool(piper_installed_voices())
+    """Whether this image has sherpa-onnx, piper_phonemize and at least one complete Piper voice."""
+    return (
+        importlib.util.find_spec("sherpa_onnx") is not None
+        and importlib.util.find_spec("piper_phonemize") is not None
+        and bool(piper_installed_voices())
+    )
 
 
 def available_engines() -> list[str]:
@@ -802,15 +806,55 @@ def _wav_to_mp3_command(wav_path: Path, output_path: Path) -> list[str]:
     ]
 
 
+# espeak-ng keeps its voice and text state in process globals and jobs run on
+# parallel worker threads, so phonemizing is serialized.
+_phonemize_lock = threading.Lock()
+_phonemizer_missing_reported = False
+
+
+def _phonemizer():
+    """piper_phonemize's phonemize_espeak, or None where the package is not installed."""
+    try:
+        from piper_phonemize import phonemize_espeak
+    except ImportError:
+        return None
+    return phonemize_espeak
+
+
+def _phonemize(phonemize_espeak, text: str, lang: str) -> list[list[int]]:
+    """The text as the codepoints of its phonemes, one list per sentence.
+
+    Empty when there is nothing to say (text espeak reduces to no phonemes at all).
+    """
+    with _phonemize_lock:
+        sentences = phonemize_espeak(text, lang)
+    return [[ord(char) for char in sentence] for sentence in sentences if sentence]
+
+
 async def synthesize_kokoro(
     text: str, output_path: Path, voice: str = "", on_progress: ProgressCallback | None = None
 ):
-    """Synthesize speech with the local Kokoro-82M model via sherpa-onnx."""
+    """Synthesize speech with the local Kokoro-82M model via sherpa-onnx.
+
+    Kokoro only runs for English here. sherpa-onnx 2 no longer falls back to
+    espeak-ng for words missing from the lexicon: it skips them, which silently
+    drops names, acronyms and symbols. So where piper_phonemize is installed the
+    text is phonemized here and passed as codepoints, speaking every word.
+    """
     import subprocess
     import tempfile
 
     import sherpa_onnx
     import soundfile as sf
+
+    global _phonemizer_missing_reported
+    phonemize_espeak = _phonemizer()
+    if phonemize_espeak is None and not _phonemizer_missing_reported:
+        # A custom image without it: the lexicon alone, so words may be skipped.
+        _phonemizer_missing_reported = True
+        logger.warning(
+            "piper_phonemize is not installed; Kokoro will skip words missing from its lexicon"
+        )
 
     voice = voice or config.KOKORO_VOICE
     sid = resolve_kokoro_sid(voice)
@@ -858,8 +902,18 @@ async def synthesize_kokoro(
                 writer = None
                 try:
                     for index, chunk in enumerate(chunks, 1):
+                        if phonemize_espeak is None:
+                            spoken = chunk
+                        else:
+                            spoken = ""
+                            gen_config.phoneme_codepoints = _phonemize(
+                                phonemize_espeak, chunk, "en-us"
+                            )
+                            if not gen_config.phoneme_codepoints:
+                                _report_from_thread(index)  # nothing to say in this piece
+                                continue
                         with _kokoro_lock:
-                            audio = engine.generate(chunk, gen_config)
+                            audio = engine.generate(spoken, gen_config)
                         if audio.sample_rate <= 0 or len(audio.samples) == 0:
                             raise RuntimeError(
                                 f"Kokoro produced no audio for chunk {index}/{len(chunks)}"
@@ -878,6 +932,8 @@ async def synthesize_kokoro(
                 finally:
                     if writer is not None:
                         writer.close()
+                if writer is None:
+                    raise ValueError("No readable text to synthesize")
 
                 result = subprocess.run(
                     _wav_to_mp3_command(wav_path, output_path), capture_output=True
@@ -893,8 +949,8 @@ async def synthesize_kokoro(
     await asyncio.to_thread(_run_sync)
 
 
-def _piper_files(voice: str) -> tuple[Path, Path, Path]:
-    """The model, tokens and espeak-ng data of a Piper voice, checked to exist."""
+def _piper_files(voice: str) -> tuple[Path, Path]:
+    """The model and tokens of a Piper voice, checked to exist."""
     if voice not in PIPER_VOICES:
         raise ValueError(f"Unknown Piper voice {voice!r}. Voices: {', '.join(PIPER_VOICES)}")
     files = _piper_voice_files(voice)
@@ -914,6 +970,9 @@ async def synthesize_piper(
 
     The model is loaded for the job and dropped after it: it loads in about a
     second, so there is no cache, idle unload or lock to keep.
+
+    sherpa-onnx 2.0 no longer bundles espeak-ng, so the text is phonemized here
+    with piper_phonemize and handed over as codepoints instead of as text.
     """
     import subprocess
     import tempfile
@@ -921,8 +980,12 @@ async def synthesize_piper(
     import sherpa_onnx
     import soundfile as sf
 
+    phonemize_espeak = _phonemizer()
+    if phonemize_espeak is None:
+        raise RuntimeError("Piper needs the piper_phonemize package, which is not installed")
+
     voice = voice or config.PIPER_VOICE
-    model, tokens, data_dir = _piper_files(voice)
+    model, tokens = _piper_files(voice)
     chunks = _split_text(text, config.TTS_CHUNK_CHARS)
     if not chunks:
         raise ValueError("No readable text to synthesize")
@@ -941,7 +1004,7 @@ async def synthesize_piper(
             sherpa_onnx.OfflineTtsConfig(
                 model=sherpa_onnx.OfflineTtsModelConfig(
                     vits=sherpa_onnx.OfflineTtsVitsModelConfig(
-                        model=str(model), tokens=str(tokens), data_dir=str(data_dir)
+                        model=str(model), tokens=str(tokens)
                     ),
                     provider="cpu",
                     num_threads=config.PIPER_NUM_THREADS,
@@ -951,6 +1014,8 @@ async def synthesize_piper(
         gen_config = sherpa_onnx.GenerationConfig()
         gen_config.sid = 0
         gen_config.speed = 1.0
+        # The espeak-ng voice comes from the model's own metadata.
+        lang = engine.lang or "en-us"
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             wav_path = Path(tmp.name)
@@ -960,7 +1025,11 @@ async def synthesize_piper(
             writer = None
             try:
                 for index, chunk in enumerate(chunks, 1):
-                    audio = engine.generate(chunk, gen_config)
+                    gen_config.phoneme_codepoints = _phonemize(phonemize_espeak, chunk, lang)
+                    if not gen_config.phoneme_codepoints:
+                        _report_from_thread(index)  # nothing to say in this piece
+                        continue
+                    audio = engine.generate("", gen_config)
                     if audio.sample_rate <= 0 or len(audio.samples) == 0:
                         raise RuntimeError(
                             f"Piper produced no audio for chunk {index}/{len(chunks)}"
@@ -979,6 +1048,8 @@ async def synthesize_piper(
             finally:
                 if writer is not None:
                     writer.close()
+            if writer is None:
+                raise ValueError("No readable text to synthesize")
 
             result = subprocess.run(_wav_to_mp3_command(wav_path, output_path), capture_output=True)
             if result.returncode != 0:

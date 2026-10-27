@@ -851,7 +851,7 @@ async def test_only_installed_piper_voices_are_offered(client, tmp_path, monkeyp
     monkeypatch.setattr(tts.config, "PIPER_MODEL_DIR", tmp_path)
     monkeypatch.setattr(tts.importlib.util, "find_spec", lambda name: object())
     directory, model = tts.PIPER_VOICES["ryan-high"]
-    (tmp_path / directory / "espeak-ng-data").mkdir(parents=True)
+    (tmp_path / directory).mkdir(parents=True)
     (tmp_path / directory / model).write_bytes(b"onnx")
     (tmp_path / directory / "tokens.txt").write_text("tokens")
 

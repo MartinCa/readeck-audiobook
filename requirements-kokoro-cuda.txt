@@ -13,7 +13,7 @@
 # Missing any one of them fails at model-load time, not at import — see the
 # ldd check in Dockerfile.kokoro that verifies the closure at build time.
 --find-links https://k2-fsa.github.io/sherpa/onnx/cuda.html
-sherpa-onnx==1.13.4+cuda12.cudnn9
+sherpa-onnx==2.0.1+cuda12.cudnn9.onnxruntime1.28.2
 nvidia-cuda-runtime-cu12   # libcudart.so.12
 nvidia-cuda-nvrtc-cu12     # libnvrtc.so.12
 nvidia-cublas-cu12         # libcublas.so.12, libcublasLt.so.12
