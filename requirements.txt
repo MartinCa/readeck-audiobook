@@ -5,4 +5,4 @@ aiosqlite==0.22.1
 edge-tts==7.3.1
 beautifulsoup4==4.15.0
 mutagen==1.48.1
-croniter==6.2.4
+croniter==7.0.0
