@@ -201,7 +201,7 @@ importers:
         version: 0.5.2
       cronstrue:
         specifier: ^3.27.0
-        version: 3.43.0
+        version: 3.46.0
       date-fns:
         specifier: ^4.4.0
         version: 4.4.0
@@ -1262,8 +1262,8 @@ packages:
   cookie-es@3.1.1:
     resolution: {integrity: sha512-UaXxwISYJPTr9hwQxMFYZ7kNhSXboMXP+Z3TRX6f1/NyaGPfuNUZOWP1pUEb75B2HjfklIYLVRfWiFZJyC6Npg==}
 
-  cronstrue@3.43.0:
-    resolution: {integrity: sha512-VLCgQYlnbRJv76ZJesXhlqNvUU58rPxscLqWf1OavLJXwkir3ouJ4GTSHLtZ+MHXv8d5TxxLppzrThtz2Np63w==}
+  cronstrue@3.46.0:
+    resolution: {integrity: sha512-ipaGUyFc2EZcgiY0Yuxr+u+pTWn8Xfe6jjAF8huJXqADYJqBdJ1BMeM6a5DyQLCsVjMj4yMvt2T/dd0cNQpgsw==}
     hasBin: true
 
   cross-spawn@7.0.6:
@@ -3533,7 +3533,7 @@ snapshots:
 
   cookie-es@3.1.1: {}
 
-  cronstrue@3.43.0: {}
+  cronstrue@3.46.0: {}
 
   cross-spawn@7.0.6:
     dependencies:
