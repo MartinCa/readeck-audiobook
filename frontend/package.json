@@ -38,7 +38,7 @@
     "@martinrun/frontend-config": "0.3.6",
     "@tanstack/router-plugin": "1.169.0",
     "@types/node": "26.6.6",
-    "@types/react": "19.3.1",
+    "@types/react": "19.3.2",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.3.0",
     "eslint": "10.15.0",
